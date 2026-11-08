@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800">
+  <!-- Pastel party · 4R (4x6") at 300 DPI · 2x3 grid, 6 photos. Photo holes are transparent. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd3e1"/>
+      <stop offset="1" stop-color="#ffe9c9"/>
+    </linearGradient>
+    <mask id="holes">
+      <rect width="1200" height="1800" fill="white"/>
+      <rect x="60"  y="240"  width="525" height="450" rx="28" fill="black"/>
+      <rect x="615" y="240"  width="525" height="450" rx="28" fill="black"/>
+      <rect x="60"  y="725"  width="525" height="450" rx="28" fill="black"/>
+      <rect x="615" y="725"  width="525" height="450" rx="28" fill="black"/>
+      <rect x="60"  y="1210" width="525" height="450" rx="28" fill="black"/>
+      <rect x="615" y="1210" width="525" height="450" rx="28" fill="black"/>
+    </mask>
+    <path id="star" d="M0,-22 L6,-7 L22,-7 L9,3 L14,19 L0,9 L-14,19 L-9,3 L-22,-7 L-6,-7 Z"/>
+  </defs>
+  <g mask="url(#holes)">
+    <rect width="1200" height="1800" fill="url(#bg)"/>
+    <!-- white borders around each photo -->
+    <g fill="#ffffff">
+      <rect x="48"  y="228"  width="549" height="474" rx="38"/>
+      <rect x="603" y="228"  width="549" height="474" rx="38"/>
+      <rect x="48"  y="713"  width="549" height="474" rx="38"/>
+      <rect x="603" y="713"  width="549" height="474" rx="38"/>
+      <rect x="48"  y="1198" width="549" height="474" rx="38"/>
+      <rect x="603" y="1198" width="549" height="474" rx="38"/>
+    </g>
+  </g>
+  <!-- confetti in the margins -->
+  <g>
+    <use href="#star" transform="translate(110 120) rotate(-12)" fill="#f7b733"/>
+    <use href="#star" transform="translate(1090 95) rotate(18) scale(1.3)" fill="#e0567a"/>
+    <use href="#star" transform="translate(1130 1735) rotate(-20)" fill="#7fc8a9"/>
+    <use href="#star" transform="translate(70 1740) rotate(10) scale(0.8)" fill="#e0567a"/>
+    <circle cx="210" cy="60" r="9" fill="#7fc8a9"/>
+    <circle cx="990" cy="185" r="7" fill="#f7b733"/>
+    <circle cx="40" cy="200" r="6" fill="#e0567a"/>
+    <circle cx="1165" cy="210" r="8" fill="#7fc8a9"/>
+    <circle cx="330" cy="1760" r="7" fill="#f7b733"/>
+    <circle cx="880" cy="1770" r="9" fill="#e0567a"/>
+  </g>
+  <text x="600" y="160" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="104" fill="#e0567a">say cheese!</text>
+  <text x="600" y="1750" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="30" letter-spacing="9" fill="#b04a6a">FLIPBOOK STUDIO</text>
+</svg>

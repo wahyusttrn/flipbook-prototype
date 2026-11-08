@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800">
+  <!-- Film 35mm · 4R (4x6") at 300 DPI · 3 landscape photos on a film strip. Photo holes are transparent. -->
+  <defs>
+    <mask id="holes">
+      <rect width="1200" height="1800" fill="white"/>
+      <rect x="150" y="60"   width="900" height="486" rx="10" fill="black"/>
+      <rect x="150" y="586"  width="900" height="486" rx="10" fill="black"/>
+      <rect x="150" y="1112" width="900" height="486" rx="10" fill="black"/>
+    </mask>
+    <!-- sprocket holes: opaque (not transparent) so they are never detected as photo slots -->
+    <pattern id="sprockets" x="0" y="18" width="110" height="90" patternUnits="userSpaceOnUse">
+      <rect x="32" y="0" width="46" height="32" rx="7" fill="#efeae0"/>
+    </pattern>
+  </defs>
+  <g mask="url(#holes)">
+    <rect width="1200" height="1800" fill="#141414"/>
+    <rect x="0" y="0" width="110" height="1800" fill="url(#sprockets)"/>
+    <rect x="1090" y="0" width="110" height="1800" fill="url(#sprockets)"/>
+  </g>
+  <g font-family="'Courier New', Courier, monospace" font-weight="bold" fill="#f5a623">
+    <text x="150" y="40" font-size="22">▸ 12</text>
+    <text x="1050" y="40" font-size="22" text-anchor="end">FB 400</text>
+    <text x="150" y="572" font-size="22">▸ 13</text>
+    <text x="1050" y="572" font-size="22" text-anchor="end">FB 400</text>
+    <text x="150" y="1098" font-size="22">▸ 14</text>
+    <text x="1050" y="1098" font-size="22" text-anchor="end">FB 400</text>
+    <text x="600" y="1700" font-size="64" text-anchor="middle" letter-spacing="10">FLIPBOOK</text>
+    <text x="600" y="1752" font-size="24" text-anchor="middle" letter-spacing="6" opacity="0.8">ISO 400 · 35MM · SELF PHOTO STUDIO</text>
+  </g>
+</svg>
