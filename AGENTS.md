@@ -25,7 +25,9 @@ Deliberately **out of scope for now** (user decisions, 2026-11-07). Don't build 
 - **Full customer-side photo editor** (filters, stickers, crop). Rejected as too big for an MVP.
 - **Per-slot pan/zoom**: photos are centre-cropped (`object-fit: cover`) into slots.
 
-Constraint: everything must run on **free tiers**: Supabase free (DB, auth, **storage**) + Cloudflare Workers free.
+Constraint: everything must run on **free tiers**: Supabase free (DB, auth, **storage**) + Vercel Hobby (hosting + API + cron).
+Hosting decision (2026-11-08): the user deploys on **Vercel**. The API was first a Cloudflare Worker and was ported to a
+Vercel Function; Cloudflare is no longer used anywhere.
 Storage decision (2026-11-08): the user chose **Supabase Storage over Cloudflare R2** to avoid extra setup for the
 prototype, accepting the 1 GB / ~5 GB egress limits. R2 is the planned upgrade path if limits bite (see §11).
 
@@ -36,11 +38,12 @@ prototype, accepting the 1 GB / ~5 GB egress limits. R2 is the planned upgrade p
 | Layer | Tech | Notes |
 | --- | --- | --- |
 | Frontend | Vite 8, React 19 + **React Compiler**, TypeScript 7 (`tsc -b`), Tailwind v4, react-router v8 | SPA |
-| API | **Cloudflare Worker** via `@cloudflare/vite-plugin` | Same repo, same dev server, same deploy |
-| Storage | **Supabase Storage**, private bucket `photos` | Accessed only by the Worker with the service-role key |
+| API | **Vercel Function** `api/index.ts` → host-agnostic `server/app.ts` (Web `Request`→`Response`) | In dev, a Vite middleware runs the same handler |
+| Storage | **Supabase Storage**, private bucket `photos` | Accessed only by the API with the service-role key |
 | DB + auth | **Supabase** (Postgres + email/password auth) | `supabase/schema.sql` |
 | Lint | oxlint | `.oxlintrc.json` |
-| Package manager | **pnpm only** | Never use npm / npx / yarn. Use `pnpm <script>`, `pnpm exec`, `pnpm wrangler …` |
+| Hosting | **Vercel** (`vercel.json`) | SPA from `dist/`, `/api/*` rewrite to the function, daily cron |
+| Package manager | **pnpm only** | Never use npm / npx / yarn. Use `pnpm <script>`, `pnpm exec`, `pnpm dlx` |
 
 Other deps: `@supabase/supabase-js`, `qrcode` (QR images), `fflate` (zip in browser).
 
@@ -49,28 +52,36 @@ Other deps: `@supabase/supabase-js`, `qrcode` (QR images), `fflate` (zip in brow
 ## 3. Architecture
 
 ```
-Browser (React SPA)
+Browser (React SPA, static from dist/)
  ├─ /admin/*  ── supabase-js (RLS, logged-in staff) ──► Supabase: sessions, templates (read/write), photos (read)
- │           └─ fetch /api/admin/* (Bearer <supabase access token>) ──► Worker
- └─ /s/:slug  ── fetch /api/public/* (no auth) ──► Worker
-Worker (/api/*, run_worker_first)
+ │           └─ fetch /api/admin/* (Bearer <supabase access token>) ──► API
+ └─ /s/:slug  ── fetch /api/public/* (no auth) ──► API
+API = handleApi() in server/app.ts
+ ├─ prod: vercel.json rewrites /api/:path* → /api?__path=:path* → api/index.ts restores the path → handleApi
+ ├─ dev:  server/devApi.ts (Vite middleware) → ssrLoadModule('/server/app.ts') → handleApi, env from .env
  ├─ Supabase service-role client (bypasses RLS)
  └─ Supabase Storage (private bucket "photos") via the same service-role client
-Cron (daily 03:00 UTC) ──► Worker.scheduled → purgeExpired()
+Vercel Cron (daily ~03:00 UTC, prod only) ──► GET /api/cron/purge (Bearer CRON_SECRET) → purgeExpired()
 ```
 
 Key design decisions (and why):
-- **Worker in front of storage**: the bucket is private with **no storage policies**; only the Worker (service role)
+- **API in front of storage**: the bucket is private with **no storage policies**; only the API (service role)
   reads/writes it, so photos are only served while the session is not expired (checked server-side). Proxying also keeps
   image URLs same-origin, which canvas compositing needs. Don't switch to public buckets or signed URLs without
   handling expiry and canvas CORS (`crossOrigin`).
-- **Uploads go through the Worker** (multipart POST), not signed upload URLs, so the DB row and the files are written
-  together and files are small after browser resizing. Worker request body limit (100 MB on free) is far above `MAX_UPLOAD_BYTES` (25 MB).
+- **Uploads go through the API** (multipart POST), not signed upload URLs, so the DB row and the files are written
+  together. **Vercel caps request and response bodies at 4.5 MB**, so `MAX_UPLOAD_BYTES` is 4 MB per file and full + thumb
+  must fit in one request. Browser resizing (2400px, q0.88) keeps photos ~0.5–2 MB. If you raise `RAW_MAX_EDGE` or quality,
+  check this limit, or switch to signed upload URLs straight to Supabase.
+- **One function for the whole API** (Vercel's recommendation for Fluid compute): don't add more files in `api/`; add routes to
+  the table in `server/app.ts`. Files in `api/` become functions, so shared code lives in `server/`.
+- **`server/app.ts` must stay host-agnostic**: Web `Request`/`Response` only, env passed in as `ServerEnv`. No `process.env`
+  reads inside it (the Vercel entry and the dev middleware pass env in).
 - **All image processing is in the browser** (canvas): resize before upload, frame compositing, hole detection.
   No server image processing, which keeps it free and simple.
-- **Photo rows are written only by the Worker** (service role), together with the file upload, so DB and storage stay consistent.
+- **Photo rows are written only by the API** (service role), together with the file upload, so DB and storage stay consistent.
   Sessions and templates' simple fields are written by the admin client directly through RLS.
-- **Public gallery never talks to Supabase directly**; it goes through the Worker, which enforces expiry.
+- **Public gallery never talks to Supabase directly**; it goes through the API, which enforces expiry.
 - **Lazy-only deps must be pre-bundled**: anything imported only from lazy admin routes goes in `optimizeDeps.include`
   (`vite.config.ts`). Otherwise Vite discovers it on first visit, re-optimizes, and the chunk import fails
   ("Failed to fetch dynamically imported module"). Currently: `@supabase/supabase-js`, `qrcode`, `fflate`.
@@ -82,18 +93,20 @@ Key design decisions (and why):
 ## 4. Repo map
 
 ```
-worker/index.ts            Worker: router table, handlers, auth check, storage helpers, cron purge
-wrangler.jsonc             Worker config: assets SPA fallback, vars, cron, compat date (no bindings)
-worker-configuration.d.ts  Generated by `pnpm cf-types` (committed). Regenerate after wrangler/env changes
+server/app.ts              API: handleApi(req, env, url?), ServerEnv, router table, handlers, auth check,
+                           storage helpers, purgeExpired (+ /api/cron/purge)
+server/devApi.ts           Vite plugin: serves /api/* in `pnpm dev` with handleApi (Node req → Web Request)
+api/index.ts               Vercel Function entry (`export default { fetch }`); restores the path from `__path`
+vercel.json                framework vite, pnpm install/build, outputDirectory dist, rewrites, crons
 supabase/schema.sql        Tables, indexes, RLS, storage bucket. Idempotent; run in Supabase SQL editor
-.env / .env.example        All env for both Vite (VITE_*) and the Worker (wrangler reads .env too)
+.env / .env.example        All env: VITE_* for the browser build, the rest for the API (dev reads .env via loadEnv)
 
 src/main.tsx               Entry: RouterProvider
 src/App.tsx                Route table: root route has errorElement + hydrateFallbackElement; admin routes lazy-loaded
 src/admin.tsx              AdminRoot = RequireAuth + AdminLayout (lazy chunk boundary)
 src/index.css              Tailwind import, theme fonts (Inter, Fraunces), .checker background
 
-src/lib/shared.ts          Types + constants shared by app AND Worker (Session, Photo, Template, Slot,
+src/lib/shared.ts          Types + constants shared by app AND API (Session, Photo, Template, Slot,
                            PublicSession, SESSION_DAYS, RAW_MAX_EDGE, THUMB_MAX_EDGE, MAX_UPLOAD_BYTES, STORAGE_BUCKET, storageKeys, isExpired)
 src/lib/supabase.ts        Browser supabase client + isSupabaseConfigured (placeholder-aware)
 src/lib/publicApi.ts       ApiError + public endpoints (NO supabase import)
@@ -137,8 +150,8 @@ Session state is derived, not stored: **expired** = `purged_at IS NOT NULL OR ex
 `purged_at` set = files are gone; UI disables extend/upload.
 
 **RLS**: `authenticated` has full access to `sessions` and `templates`, **select only** on `photos`.
-`anon` has nothing. The Worker uses the service role. Because "authenticated == staff", **public sign-ups must be
-disabled** in Supabase; `ADMIN_EMAILS` is an extra allowlist enforced by the Worker only (not by RLS).
+`anon` has nothing. The API uses the service role. Because "authenticated == staff", **public sign-ups must be
+disabled** in Supabase; `ADMIN_EMAILS` is an extra allowlist enforced by the API only (not by RLS).
 
 Schema changes: edit `supabase/schema.sql` keeping it **idempotent** (`if not exists`, `drop policy if exists`),
 update types in `src/lib/shared.ts`, and note in both docs that the SQL must be re-run.
@@ -155,7 +168,7 @@ An older schema had `photos.r2_key`; `schema.sql` renames it to `storage_key` if
 
 ---
 
-## 6. Worker API (`worker/index.ts`)
+## 6. API (`server/app.ts`)
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
@@ -170,6 +183,7 @@ An older schema had `photos.r2_key`; `schema.sql` renames it to `storage_key` if
 | POST | `/api/admin/templates` | staff | multipart `overlay` (image/png), `name`, `width`, `height`, `slots` (JSON, 1–20) |
 | DELETE | `/api/admin/templates/:id` | staff | Overlay file + row (framed photos keep, `template_id` → null) |
 | POST | `/api/admin/purge` | staff | Run cleanup now → `{purged}` |
+| GET | `/api/cron/purge` | `Authorization: Bearer $CRON_SECRET` | Vercel Cron entry → `{purged}`; 401 if the secret is missing or wrong |
 
 Conventions:
 - Routes are a table of `[method, regex, admin, handler]`. Add new routes there; IDs match `([0-9a-f-]{36})`.
@@ -179,8 +193,8 @@ Conventions:
 - Every `/api` route except `/api/health` returns 503 with a clear message if Supabase env is missing/placeholder.
 - When writing files + DB together, remove the uploaded files if anything fails (see `uploadPhoto`, `createTemplate`).
 - Storage helpers: `putObject`, `removeObjects` (batches of 100), `serveObject`, `deleteSessionFiles`. All storage access goes
-  through these, so switching to R2 later only means changing them (plus an `r2_buckets` binding in `wrangler.jsonc`).
-- Cron: `purgeExpired()` handles ≤50 sessions per run whose `expires_at < now - PURGE_GRACE_DAYS`, deletes the session's files and
+  through these, so switching to R2 later only means changing them (via R2's S3 API with keys in env).
+- Cron: `purgeExpired()` is idempotent (Vercel may skip or repeat runs) and handles ≤50 sessions per run whose `expires_at < now - PURGE_GRACE_DAYS`, deletes the session's files and
   photo rows, sets `purged_at`. The session row is kept so the gallery can still say "expired".
 - Images are served with `cache-control: private, max-age=3600`. After expiry a cached copy can live up to 1 h on the device. Acceptable.
 
@@ -217,22 +231,25 @@ Framed first (served **full size**: few and the hero, thumbs look soft on phones
 
 ### Sessions
 Create inserts `{slug: randomSlug(), name, expires_at: now + SESSION_DAYS}` directly via supabase-js.
-Extend: `max(now, expires_at) + 30 days`. Rename via `window.prompt`. Delete via Worker.
+Extend: `max(now, expires_at) + 30 days`. Rename via `window.prompt`. Delete via the API.
 
 ---
 
 ## 8. Conventions
 
-- **pnpm only.** Scripts: `pnpm dev | build | typecheck | lint | cf-types | preview | deploy`. Wrangler: `pnpm wrangler …`.
+- **pnpm only.** Scripts: `pnpm dev | build | typecheck | lint | preview`. Deploys happen by pushing to `main` (Vercel Git integration).
   Adding deps: `pnpm add` / `pnpm add -D`. If a new dep needs a build script, approve it with
   `pnpm approve-builds <pkg> -y` (writes `allowBuilds` in `pnpm-workspace.yaml`).
 - **React Compiler is on**: don't add `useMemo`/`useCallback`/`memo` for performance. Plain `useState` + `useEffect`
   data loading; no global state library. Keep effects cancel-safe (`let alive = true` pattern).
 - **Styling**: Tailwind utility classes, stone palette, `font-display` (Fraunces) for headings. Reuse `ui.tsx` primitives
   before writing new button/card styles. Admin is desktop-first; the gallery is **mobile-first**.
-- **Types shared with the Worker go in `src/lib/shared.ts`** (it's included in `tsconfig.worker.json`). It must stay
-  free of DOM/browser APIs.
-- `tsconfig` is split: `tsconfig.app.json` (src), `tsconfig.worker.json` (worker + shared.ts), `tsconfig.node.json` (vite config).
+- **Types shared with the API go in `src/lib/shared.ts`** (it's included in `tsconfig.server.json`). It must stay
+  free of DOM/browser APIs and imports.
+- `tsconfig` is split: `tsconfig.app.json` (src), `tsconfig.server.json` (server/app.ts, api/, shared.ts),
+  `tsconfig.node.json` (vite.config.ts + server/devApi.ts, `nodenext`: relative imports need the `.ts` extension).
+- **Relative imports in `server/` and `api/` use `.js` extensions** (`'../server/app.js'`, `'../src/lib/shared.js'`). The project
+  is ESM (`"type": "module"`) and Vercel compiles each TS file separately, so extensionless imports would fail at runtime.
 - Component files should only export components (oxlint `only-export-components`); put hooks/helpers in their own files.
 - Destructive admin actions use `window.confirm` (prototype-level UX is fine).
 - Code comments explain *why*, briefly. No dead code; no placeholder TODO files.
@@ -241,19 +258,25 @@ Extend: `max(now, expires_at) + 30 days`. Rename via `window.prompt`. Delete via
 
 ## 9. Env & config
 
-`.env` (gitignored) is read by **Vite** (only `VITE_*` reach the browser) **and by Wrangler** (Worker env in dev,
-because there's no `.dev.vars`). Don't create `.dev.vars`; it would make Wrangler ignore `.env`.
+`.env` (gitignored) holds everything. Vite exposes only `VITE_*` to the browser bundle; the dev middleware reads **all** keys
+with `loadEnv(mode, root, '')` on every request. On Vercel, the same keys are set in Project → Settings → Environment
+Variables (`VITE_*` are read at **build** time, so changing them needs a redeploy; the rest are read at runtime via `process.env`).
 
 | Key | Side | Notes |
 | --- | --- | --- |
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | browser | URL `https://ggdwsnufmpcrcmdcpegz.supabase.co`. Key = **publishable** key `sb_publishable_…` (Settings → API Keys). Placeholders (`YOUR-PROJECT`, `your-…`) are treated as "not configured" → `SetupNotice` |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Worker | Key = **secret** key `sb_secret_…` (Settings → API Keys). **Never** prefix with `VITE_`. In production: `pnpm wrangler secret put …` |
-| `ADMIN_EMAILS` | Worker | Optional comma-separated allowlist |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | API | Key = **secret** key `sb_secret_…` (Settings → API Keys). **Never** prefix with `VITE_` |
+| `ADMIN_EMAILS` | API | Optional comma-separated allowlist |
+| `CRON_SECRET` | API | Random 16+ letters/digits. Vercel Cron sends `Authorization: Bearer <it>`; without it `/api/cron/purge` always returns 401 |
+| `PURGE_GRACE_DAYS` | API | Optional, default 3 |
 
-`wrangler.jsonc`: `compatibility_date` must not be newer than the installed `workerd` supports.
-`vars.PURGE_GRACE_DAYS` = 3. Cron `0 3 * * *`. No bindings (storage is Supabase). After any change to bindings/vars/env
-keys run `pnpm cf-types`. The SPA fallback (`not_found_handling: single-page-application`) + `run_worker_first: ["/api/*"]`
-is what makes `/admin/...` and `/s/:slug` deep links work.
+`vercel.json`: `outputDirectory: dist` (without it Vercel 404s everything), rewrites `/api/:path*` → `/api?__path=:path*`
+(Vercel also appends `path=`; `api/index.ts` strips both) and everything else → `/index.html` (static files are served first,
+so this is the SPA fallback that makes `/admin/...` and `/s/:slug` deep links work). Cron `0 3 * * *` (Hobby: once a day,
+anytime in that hour, production only).
+
+Vercel's builder picks the pnpm major from the lockfile (it chose pnpm 9 in a local `vercel build`). Fine so far; if installs
+ever break on Vercel, pin `packageManager` in package.json and enable corepack (`ENABLE_EXPERIMENTAL_COREPACK=1`).
 
 Use the new Supabase key format (`sb_publishable_…` / `sb_secret_…`); legacy anon/service_role JWT keys are retired in early 2027.
 The env var *names* still say `ANON_KEY` / `SERVICE_ROLE_KEY`; they hold the new keys.
@@ -268,8 +291,14 @@ Always run before saying a change is done:
 ```bash
 pnpm typecheck && pnpm lint && pnpm build
 ```
-Smoke test the Worker without Supabase keys: `pnpm dev`, then `curl localhost:<port>/api/health` (expects 503 with a
-"Missing env" message) and `curl localhost:<port>/api/nope` (404 JSON). `/s/anything` must return the SPA HTML.
+Smoke test the API: `pnpm dev`, then `curl localhost:<port>/api/health` (`{"ok":true}`, or 503 "Missing env" without keys),
+`/api/nope` (404 JSON), `/api/cron/purge` without the secret (401). `/s/anything` must return the SPA HTML.
+
+Verifying the Vercel build without deploying (done 2026-11-08): write a placeholder `.vercel/project.json`
+(`{"projectId":"prj_local_test","orgId":"team_local_test","settings":{"framework":"vite","outputDirectory":"dist"}}`), run
+`pnpm dlx vercel@latest build --yes`, inspect `.vercel/output/config.json` (routes, crons) and
+`.vercel/output/functions/api/index.func/`, then import `api/index.js` from there with Node and call
+`default.fetch(new Request('https://x/api?__path=health'))`. **Delete `.vercel/` afterwards.**
 
 Browser-only code (`src/lib/image.ts`) can't run in Node (no canvas). To test it, serve a temporary HTML page from
 `public/` that imports `/src/lib/image.ts`, open it in headless Chrome via the DevTools protocol (`--dump-dom` dumps
@@ -277,7 +306,7 @@ before async module code finishes, so poll with `Runtime.evaluate`), then **dele
 samples: classic-strip → 4 slots ≈ `{33,33,534,378}`…; film-35mm → 3 ≈ `{147,57,906,492}`…;
 pastel-party → 6 ≈ `{57,237,531,456}`… (detected boxes are ~3px larger than the holes on purpose).
 
-End-to-end against the real project (done 2026-11-08, all 46 checks passed). Method, if you repeat it:
+End-to-end against the real project (done 2026-11-08, all 46 checks passed, again after the Vercel port). Method, if you repeat it:
 - Use a **temporary staff user** created with the service key (`auth.admin.createUser`, `email_confirm: true`) and sign in
   with the publishable key. Never ask for or use the owner's password. **Delete the user and all test rows/files after.**
 - Test scripts and fixtures live in the scratchpad, not the repo. Run Node scripts that need `@supabase/supabase-js` from the
@@ -287,7 +316,8 @@ End-to-end against the real project (done 2026-11-08, all 46 checks passed). Met
   need the native value setter + `input` event), Auto-fill + Save framed photo, check composited pixel colours, and the
   gallery at 390px width (images load, no horizontal scroll, lightbox, unknown slug).
 - Run your own dev server on a separate port (`pnpm dev --port 5199 --strictPort`) as a tracked background task and stop
-  it by task/PID. **Never `pkill` vite/workerd or delete `node_modules/.vite`**: the user may have their own dev server running.
+  it by task/PID. **Never `pkill` vite or delete `node_modules/.vite`**: the user may have their own dev server running.
+- The installed frames are in the project, so the composer opens on "Classic strip"; a UI test must click its own test frame first.
 
 ---
 
@@ -295,7 +325,7 @@ End-to-end against the real project (done 2026-11-08, all 46 checks passed). Met
 
 - **Supabase free projects pause after ~1 week of inactivity.** A paused project looks like network errors.
 - **Supabase Storage free**: **1 GB** files, **~5 GB/month egress** shared with DB traffic. Every gallery thumbnail and
-  download is proxied by the Worker but still counts as Supabase egress. ~20 MB per session → ~50 live sessions.
+  download is proxied by the API but still counts as Supabase egress (and as Vercel function traffic). ~20 MB per session → ~50 live sessions.
   Browser resizing keeps photos ~0.5–1 MB; never store camera originals. Upgrade path: Cloudflare R2 (10 GB, free egress).
 - `createImageBitmap` on 40+ MP JPEGs uses a lot of memory. Upload concurrency is capped at 2 and bitmaps are `.close()`d.
 - Canvas reads (compose, detect) need **same-origin** images. That's why overlays are served through `/api/templates/:id/overlay`.
@@ -303,6 +333,9 @@ End-to-end against the real project (done 2026-11-08, all 46 checks passed). Met
 - `navigator.share` must be called directly from a tap. Hence the two-step "Save all" on phones.
 - HEIC isn't decodable in Chrome; the camera shoots JPEG, so uploads accept JPEG/PNG/WebP only.
 - New lazy-route dependency? Add it to `optimizeDeps.include` (see §3).
+- **Vercel function region** defaults to US East. Each API call makes several Supabase round trips, so set the function region
+  next to the Supabase region (Vercel → Settings → Functions).
+- `pnpm preview` serves only static files: `/api` doesn't work there. Use `pnpm dev` for anything that needs the API.
 - TypeScript is v7 (`tsc` native). Use `tsc -b` via `pnpm typecheck`.
 
 ---
@@ -314,7 +347,7 @@ End-to-end against the real project (done 2026-11-08, all 46 checks passed). Met
   Printing must not wait for uploads: compose locally → print → upload in background.
 - **Auto-import**: File System Access API on the station PC, poll the tether folder, feed new files into `Uploader`'s pipeline.
 - **Customer frame switching** on the gallery: reuse `composeFrame` + public overlay endpoint with the session's raw photos.
-- **Payments**: Midtrans/Xendit (QRIS) webhook → Worker → extend `expires_at`.
+- **Payments**: Midtrans/Xendit (QRIS) webhook → a new route in `server/app.ts` → extend `expires_at`.
 
 ---
 

@@ -6,7 +6,7 @@ import { Spinner } from './ui'
 
 const CONCURRENCY = 2
 
-/** Drop camera JPEGs here. Each is resized in the browser, then sent to Supabase Storage through the Worker. */
+/** Drop camera JPEGs here. Each is resized in the browser, then sent to Supabase Storage through the API. */
 export function Uploader({ sessionId, onUploaded }: { sessionId: string; onUploaded: (p: Photo) => void }) {
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)

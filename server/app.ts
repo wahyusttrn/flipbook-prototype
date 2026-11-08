@@ -1,8 +1,9 @@
-// Cloudflare Worker: the small server side of the app.
+// The server side of the app, host-agnostic (Web Request → Response).
+// Used by the Vercel function (api/index.ts) and by `pnpm dev` (Vite middleware in vite.config.ts).
 //  - keeps the private Supabase Storage bucket private (photos are only served
 //    while a session is not expired)
 //  - holds the Supabase service-role key (DB + storage)
-//  - runs the daily cleanup of expired sessions
+//  - runs the daily cleanup of expired sessions (Vercel Cron → /api/cron/purge)
 //
 // Public:  GET  /api/health
 //          GET  /api/public/sessions/:slug
@@ -15,6 +16,7 @@
 //          POST   /api/admin/templates             (multipart: overlay, name, width, height, slots)
 //          DELETE /api/admin/templates/:id
 //          POST   /api/admin/purge                 (run the cleanup now)
+// Cron:    GET    /api/cron/purge                  (Authorization: Bearer $CRON_SECRET, sent by Vercel Cron)
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -25,7 +27,19 @@ import {
   type PhotoKind,
   type PublicSession,
   type Slot,
-} from '../src/lib/shared'
+} from '../src/lib/shared.js'
+
+/** Server env (process.env on Vercel, .env via Vite's loadEnv in dev). */
+export interface ServerEnv {
+  SUPABASE_URL?: string
+  SUPABASE_SERVICE_ROLE_KEY?: string
+  /** Optional comma-separated staff allowlist */
+  ADMIN_EMAILS?: string
+  /** Days after expiry before files are deleted (default 3) */
+  PURGE_GRACE_DAYS?: string
+  /** Vercel sends it as `Authorization: Bearer …` on cron requests */
+  CRON_SECRET?: string
+}
 
 class HttpError extends Error {
   status: number
@@ -38,20 +52,21 @@ class HttpError extends Error {
 const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { 'cache-control': 'no-store' } })
 
-function configError(env: Env): string | null {
-  const missing = (['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'] as const).filter(
-    (k) => !env[k] || env[k].includes('YOUR-PROJECT') || env[k].startsWith('your-'),
-  )
+function configError(env: ServerEnv): string | null {
+  const missing = (['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'] as const).filter((k) => {
+    const v = env[k]
+    return !v || v.includes('YOUR-PROJECT') || v.startsWith('your-')
+  })
   return missing.length ? `Missing env: ${missing.join(', ')} (see .env.example)` : null
 }
 
-function db(env: Env): SupabaseClient {
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+function db(env: ServerEnv): SupabaseClient {
+  return createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 }
 
-async function requireAdmin(req: Request, env: Env, sb: SupabaseClient) {
+async function requireAdmin(req: Request, env: ServerEnv, sb: SupabaseClient) {
   const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
   if (!token) throw new HttpError(401, 'Not logged in')
   const { data, error } = await sb.auth.getUser(token)
@@ -290,7 +305,7 @@ async function serveOverlay(sb: SupabaseClient, id: string) {
 }
 
 /** Delete stored files of sessions that expired more than PURGE_GRACE_DAYS ago. */
-async function purgeExpired(env: Env) {
+export async function purgeExpired(env: ServerEnv) {
   const sb = db(env)
   const graceDays = Number(env.PURGE_GRACE_DAYS) || 3
   const cutoff = new Date(Date.now() - graceDays * 86_400_000).toISOString()
@@ -316,7 +331,7 @@ async function purgeExpired(env: Env) {
 const UUID = '([0-9a-f-]{36})'
 const routes: [method: string, pattern: RegExp, admin: boolean, handler: (ctx: {
   req: Request
-  env: Env
+  env: ServerEnv
   sb: SupabaseClient
   url: URL
   p: string[]
@@ -333,33 +348,36 @@ const routes: [method: string, pattern: RegExp, admin: boolean, handler: (ctx: {
   ['POST', /^\/api\/admin\/purge$/, true, async ({ env }) => json({ purged: await purgeExpired(env) })],
 ]
 
-export default {
-  async fetch(req, env) {
-    const url = new URL(req.url)
-    try {
-      if (url.pathname === '/api/health') {
-        const err = configError(env)
-        return json({ ok: !err, error: err ?? undefined }, err ? 503 : 200)
-      }
-      for (const [method, pattern, admin, handler] of routes) {
-        const m = url.pathname.match(pattern)
-        if (!m || req.method !== method) continue
-        const err = configError(env)
-        if (err) throw new HttpError(503, err)
-        const sb = db(env)
-        if (admin) await requireAdmin(req, env, sb)
-        return await handler({ req, env, sb, url, p: m.slice(1) })
-      }
-      throw new HttpError(404, 'Not found')
-    } catch (e) {
-      if (e instanceof HttpError) return json({ error: e.message }, e.status)
-      console.error(e)
-      const message = e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Internal error'
-      return json({ error: message }, 500)
+/**
+ * Handle one /api request. `url` defaults to the request URL; the Vercel entry passes the
+ * original path explicitly because its rewrite moves the path into a query parameter.
+ */
+export async function handleApi(req: Request, env: ServerEnv, url = new URL(req.url)): Promise<Response> {
+  try {
+    if (url.pathname === '/api/health') {
+      const err = configError(env)
+      return json({ ok: !err, error: err ?? undefined }, err ? 503 : 200)
     }
-  },
-
-  async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(purgeExpired(env))
-  },
-} satisfies ExportedHandler<Env>
+    if (url.pathname === '/api/cron/purge' && req.method === 'GET') {
+      if (!env.CRON_SECRET || req.headers.get('authorization') !== `Bearer ${env.CRON_SECRET}`) {
+        throw new HttpError(401, 'Unauthorized')
+      }
+      return json({ purged: await purgeExpired(env) })
+    }
+    for (const [method, pattern, admin, handler] of routes) {
+      const m = url.pathname.match(pattern)
+      if (!m || req.method !== method) continue
+      const err = configError(env)
+      if (err) throw new HttpError(503, err)
+      const sb = db(env)
+      if (admin) await requireAdmin(req, env, sb)
+      return await handler({ req, env, sb, url, p: m.slice(1) })
+    }
+    throw new HttpError(404, 'Not found')
+  } catch (e) {
+    if (e instanceof HttpError) return json({ error: e.message }, e.status)
+    console.error(e)
+    const message = e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Internal error'
+    return json({ error: message }, 500)
+  }
+}

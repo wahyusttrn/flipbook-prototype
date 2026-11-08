@@ -49,7 +49,7 @@ create index if not exists photos_session_idx on public.photos (session_id, kind
 
 -- ── Row Level Security ────────────────────────────────────────────────────
 -- Admin UI (logged-in user) reads/writes directly. The public gallery never
--- touches these tables; it goes through the Worker, which checks expiry.
+-- touches these tables; it goes through the API, which checks expiry.
 -- IMPORTANT: disable public sign-ups (Authentication → Sign In / Providers)
 -- and create the admin user by hand, so "authenticated" == staff.
 alter table public.sessions  enable row level security;
@@ -62,12 +62,12 @@ drop policy if exists "staff read photos"   on public.photos;
 
 create policy "staff all sessions"  on public.sessions  for all    to authenticated using (true) with check (true);
 create policy "staff all templates" on public.templates for all    to authenticated using (true) with check (true);
--- photo rows are written by the Worker (service role) together with the file upload
+-- photo rows are written by the API (service role) together with the file upload
 create policy "staff read photos"   on public.photos    for select to authenticated using (true);
 
 -- ── Storage bucket ────────────────────────────────────────────────────────
 -- Private bucket for photos + frame overlays. No storage policies on purpose:
--- only the Worker (service role) reads/writes it, so expiry is always enforced.
+-- only the API (service role) reads/writes it, so expiry is always enforced.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('photos', 'photos', false, 26214400, array['image/jpeg', 'image/png'])
 on conflict (id) do nothing;

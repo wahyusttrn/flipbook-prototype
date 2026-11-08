@@ -8,9 +8,7 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "oxlint",
-    "preview": "vite preview",
-    "cf-types": "wrangler types",
-    "deploy": "pnpm build && wrangler deploy"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",
@@ -22,7 +20,6 @@
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
-    "@cloudflare/vite-plugin": "^1.67.0",
     "@rolldown/plugin-babel": "^0.3.0",
     "@tailwindcss/vite": "^4.3.4",
     "@types/babel__core": "^7.20.5",
@@ -35,7 +32,6 @@
     "oxlint": "^1.90.0",
     "tailwindcss": "^4.3.4",
     "typescript": "~7.0.2",
-    "vite": "^8.3.6",
-    "wrangler": "^4.158.0"
+    "vite": "^8.3.6"
   }
 }

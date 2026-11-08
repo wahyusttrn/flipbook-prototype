@@ -1,4 +1,4 @@
-// Types + constants shared by the React app and the Worker.
+// Types + constants shared by the React app and the API (server/app.ts).
 
 export type PhotoKind = 'raw' | 'framed'
 export type PhotoVariant = 'full' | 'thumb'
@@ -59,10 +59,10 @@ export const SESSION_DAYS = 10
 export const RAW_MAX_EDGE = 2400
 /** Long edge (px) of thumbnails used in grids. */
 export const THUMB_MAX_EDGE = 480
-/** Max upload size accepted by the Worker. */
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+/** Max size per uploaded file. Vercel functions reject request bodies over 4.5 MB (full + thumb together). */
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
-/** Private Supabase Storage bucket (created by supabase/schema.sql). Only the Worker touches it. */
+/** Private Supabase Storage bucket (created by supabase/schema.sql). Only the API touches it. */
 export const STORAGE_BUCKET = 'photos'
 
 export const storageKeys = {
