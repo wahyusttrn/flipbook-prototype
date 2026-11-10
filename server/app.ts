@@ -10,7 +10,10 @@
 //          GET  /api/public/photos/:id/:variant[?download=1]
 //          GET  /api/templates/:id/overlay
 // Admin:   GET    /api/admin/photos/:id/:variant
-//          POST   /api/admin/sessions/:id/photos   (multipart: full, thumb, kind, width, height, template_id?)
+//          POST   /api/admin/sessions/:id/photos   (multipart: full, thumb, kind, width, height, template_id?,
+//                                                    take_id + frame_index when kind = 'frame')
+//          POST   /api/admin/sessions/:id/takes    (JSON: fps, source_name) → take row
+//          DELETE /api/admin/takes/:id             (take + all its frames)
 //          DELETE /api/admin/photos/:id
 //          DELETE /api/admin/sessions/:id
 //          POST   /api/admin/templates             (multipart: overlay, name, width, height, slots)
@@ -20,6 +23,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
+  MAX_TAKE_FRAMES,
   MAX_UPLOAD_BYTES,
   isExpired,
   STORAGE_BUCKET,
@@ -110,7 +114,7 @@ async function serveObject(sb: SupabaseClient, key: string, downloadName?: strin
 
 /** Delete every file of a session (both raw/ and framed/ folders). */
 async function deleteSessionFiles(sb: SupabaseClient, sessionId: string) {
-  for (const kind of ['raw', 'framed'] as const) {
+  for (const kind of ['raw', 'framed', 'frame'] as const) {
     const folder = storageKeys.sessionFolder(sessionId, kind)
     for (;;) {
       const { data, error } = await bucket(sb).list(folder, { limit: 1000 })
@@ -154,13 +158,18 @@ async function getPublicSession(sb: SupabaseClient, slug: string): Promise<Respo
   if (isExpired(s)) {
     return json({ status: 'expired', name: s.name, expires_at: s.expires_at } satisfies PublicSession)
   }
-  const { data: photos, error: pErr } = await sb
-    .from('photos')
-    .select('id, kind, width, height')
-    .eq('session_id', s.id)
-    .order('created_at')
+  const [{ data: photos, error: pErr }, { data: takes, error: tErr }] = await Promise.all([
+    sb
+      .from('photos')
+      .select('id, kind, width, height, take_id, frame_index')
+      .eq('session_id', s.id)
+      .order('created_at')
+      .order('frame_index', { nullsFirst: true }),
+    sb.from('takes').select('id, fps').eq('session_id', s.id).order('created_at'),
+  ])
   if (pErr) throw pErr
-  return json({ status: 'ok', name: s.name, expires_at: s.expires_at, photos } satisfies PublicSession)
+  if (tErr) throw tErr
+  return json({ status: 'ok', name: s.name, expires_at: s.expires_at, photos, takes } satisfies PublicSession)
 }
 
 async function loadPhoto(sb: SupabaseClient, id: string) {
@@ -193,12 +202,28 @@ async function uploadPhoto(req: Request, sb: SupabaseClient, sessionId: string) 
 
   const form = await req.formData()
   const kind = form.get('kind') as PhotoKind
-  if (kind !== 'raw' && kind !== 'framed') throw new HttpError(400, 'Invalid "kind"')
+  if (kind !== 'raw' && kind !== 'framed' && kind !== 'frame') throw new HttpError(400, 'Invalid "kind"')
   const full = fileField(form, 'full', ['image/jpeg'])
   const thumb = fileField(form, 'thumb', ['image/jpeg'])
   const width = intField(form, 'width')
   const height = intField(form, 'height')
   const templateId = (form.get('template_id') as string | null) || null
+  let takeId: string | null = null
+  let frameIndex: number | null = null
+  if (kind === 'frame') {
+    takeId = String(form.get('take_id') ?? '')
+    // Check the format here: an invalid uuid would otherwise surface as a 500 from Postgres.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(takeId)) {
+      throw new HttpError(400, 'Missing or invalid "take_id"')
+    }
+    frameIndex = Number(form.get('frame_index'))
+    if (!Number.isInteger(frameIndex) || frameIndex < 0 || frameIndex >= MAX_TAKE_FRAMES) {
+      throw new HttpError(400, 'Invalid "frame_index"')
+    }
+    const { data: take, error: tErr } = await sb.from('takes').select('session_id').eq('id', takeId).maybeSingle()
+    if (tErr) throw tErr
+    if (!take || take.session_id !== sessionId) throw new HttpError(400, 'Invalid "take_id"')
+  }
 
   const id = crypto.randomUUID()
   const storage_key = storageKeys.photo(sessionId, kind, id)
@@ -215,7 +240,18 @@ async function uploadPhoto(req: Request, sb: SupabaseClient, sessionId: string) 
 
   const { data: row, error: insErr } = await sb
     .from('photos')
-    .insert({ id, session_id: sessionId, kind, storage_key, thumb_key, width, height, template_id: templateId })
+    .insert({
+      id,
+      session_id: sessionId,
+      kind,
+      storage_key,
+      thumb_key,
+      width,
+      height,
+      template_id: templateId,
+      take_id: takeId,
+      frame_index: frameIndex,
+    })
     .select()
     .single()
   if (insErr) {
@@ -223,6 +259,30 @@ async function uploadPhoto(req: Request, sb: SupabaseClient, sessionId: string) 
     throw insErr
   }
   return json(row, 201)
+}
+
+async function createTake(req: Request, sb: SupabaseClient, sessionId: string) {
+  const { data: s, error } = await sb.from('sessions').select('id, purged_at').eq('id', sessionId).maybeSingle()
+  if (error) throw error
+  if (!s) throw new HttpError(404, 'Session not found')
+  if (s.purged_at) throw new HttpError(410, 'Session files were already deleted')
+  const body = (await req.json().catch(() => null)) as { fps?: unknown; source_name?: unknown } | null
+  const fps = Number(body?.fps)
+  if (!Number.isFinite(fps) || fps < 1 || fps > 60) throw new HttpError(400, 'fps must be between 1 and 60')
+  const source_name = String(body?.source_name ?? '').slice(0, 200)
+  const { data, error: insErr } = await sb.from('takes').insert({ session_id: sessionId, fps, source_name }).select().single()
+  if (insErr) throw insErr
+  return json(data, 201)
+}
+
+async function deleteTake(sb: SupabaseClient, id: string) {
+  const { data: frames, error } = await sb.from('photos').select('storage_key, thumb_key').eq('take_id', id)
+  if (error) throw error
+  await removeObjects(sb, (frames ?? []).flatMap((f) => [f.storage_key, f.thumb_key]))
+  const { data: gone, error: delErr } = await sb.from('takes').delete().eq('id', id).select('id') // frames cascade
+  if (delErr) throw delErr
+  if (!gone?.length) throw new HttpError(404, 'Take not found')
+  return json({ ok: true })
 }
 
 async function deletePhoto(sb: SupabaseClient, id: string) {
@@ -320,6 +380,7 @@ export async function purgeExpired(env: ServerEnv) {
   for (const s of sessions ?? []) {
     await deleteSessionFiles(sb, s.id)
     await sb.from('photos').delete().eq('session_id', s.id)
+    await sb.from('takes').delete().eq('session_id', s.id)
     await sb.from('sessions').update({ purged_at: new Date().toISOString() }).eq('id', s.id)
   }
   console.log(`purge: ${sessions?.length ?? 0} session(s) cleaned`)
@@ -341,6 +402,8 @@ const routes: [method: string, pattern: RegExp, admin: boolean, handler: (ctx: {
   ['GET', new RegExp(`^/api/templates/${UUID}/overlay$`), false, ({ sb, p }) => serveOverlay(sb, p[0])],
   ['GET', new RegExp(`^/api/admin/photos/${UUID}/(full|thumb)$`), true, ({ sb, p, url }) => servePhoto(sb, p[0], p[1], url, false)],
   ['POST', new RegExp(`^/api/admin/sessions/${UUID}/photos$`), true, ({ req, sb, p }) => uploadPhoto(req, sb, p[0])],
+  ['POST', new RegExp(`^/api/admin/sessions/${UUID}/takes$`), true, ({ req, sb, p }) => createTake(req, sb, p[0])],
+  ['DELETE', new RegExp(`^/api/admin/takes/${UUID}$`), true, ({ sb, p }) => deleteTake(sb, p[0])],
   ['DELETE', new RegExp(`^/api/admin/photos/${UUID}$`), true, ({ sb, p }) => deletePhoto(sb, p[0])],
   ['DELETE', new RegExp(`^/api/admin/sessions/${UUID}$`), true, ({ sb, p }) => deleteSession(sb, p[0])],
   ['POST', /^\/api\/admin\/templates$/, true, ({ req, sb }) => createTemplate(req, sb)],

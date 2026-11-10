@@ -1,6 +1,7 @@
 // Types + constants shared by the React app and the API (server/app.ts).
 
-export type PhotoKind = 'raw' | 'framed'
+/** raw = camera photo, framed = composited frame, frame = one flipbook page sampled from a video take */
+export type PhotoKind = 'raw' | 'framed' | 'frame'
 export type PhotoVariant = 'full' | 'thumb'
 
 /** A photo hole in a frame template, in template pixels. */
@@ -39,6 +40,18 @@ export interface Photo {
   width: number
   height: number
   template_id: string | null
+  /** Only for kind 'frame' */
+  take_id: string | null
+  frame_index: number | null
+  created_at: string
+}
+
+/** One video import: its frames are photos with kind 'frame' and this take_id. */
+export interface Take {
+  id: string
+  session_id: string
+  fps: number
+  source_name: string
   created_at: string
 }
 
@@ -48,7 +61,8 @@ export type PublicSession =
       status: 'ok'
       name: string
       expires_at: string
-      photos: Pick<Photo, 'id' | 'kind' | 'width' | 'height'>[]
+      photos: Pick<Photo, 'id' | 'kind' | 'width' | 'height' | 'take_id' | 'frame_index'>[]
+      takes: Pick<Take, 'id' | 'fps'>[]
     }
   | { status: 'expired'; name: string; expires_at: string }
 
@@ -59,6 +73,12 @@ export const SESSION_DAYS = 10
 export const RAW_MAX_EDGE = 2400
 /** Long edge (px) of thumbnails used in grids. */
 export const THUMB_MAX_EDGE = 480
+/** Long edge (px) of stored flipbook frames. Video is ≤1080p anyway; a flipbook page is ~3×2" (900px at 300 DPI). */
+export const FRAME_MAX_EDGE = 1920
+/** Default sampling rate. 12 lands exactly on frames of 24 and 60 fps video (every 2nd / 5th). */
+export const DEFAULT_FLIPBOOK_FPS = 12
+/** Safety cap per take (20 s at 12 fps), so a long video isn't turned into thousands of uploads. */
+export const MAX_TAKE_FRAMES = 240
 /** Max size per uploaded file. Vercel functions reject request bodies over 4.5 MB (full + thumb together). */
 export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 

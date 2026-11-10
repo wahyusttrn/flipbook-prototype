@@ -1,11 +1,12 @@
-import { zipSync } from 'fflate'
 import { useEffect, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router'
+import { FlipbookPlayer } from '../components/FlipbookPlayer'
 import { Spinner } from '../components/ui'
 import { ApiError, publicApi } from '../lib/publicApi'
 import { downloadBlob } from '../lib/download'
 import { daysLeft, formatDate } from '../lib/format'
 import type { PublicSession } from '../lib/shared'
+import { pageFileName, zipFiles } from '../lib/zip'
 
 type GalleryPhoto = Extract<PublicSession, { status: 'ok' }>['photos'][number]
 
@@ -59,7 +60,15 @@ export function Gallery() {
 
   const framed = data.photos.filter((p) => p.kind === 'framed')
   const raw = data.photos.filter((p) => p.kind === 'raw')
-  const ordered = [...framed, ...raw] // lightbox order
+  const ordered = [...framed, ...raw] // lightbox + "save all" order (flipbook pages are separate)
+  const takes = data.takes
+    .map((t) => ({
+      ...t,
+      pages: data.photos
+        .filter((p) => p.kind === 'frame' && p.take_id === t.id)
+        .sort((a, b) => (a.frame_index ?? 0) - (b.frame_index ?? 0)),
+    }))
+    .filter((t) => t.pages.length > 0)
   const left = daysLeft(data.expires_at)
 
   return (
@@ -70,11 +79,24 @@ export function Gallery() {
         <p className="mt-2 text-sm text-stone-500">
           Available until {formatDate(data.expires_at)} ({left} day{left === 1 ? '' : 's'} left). Save them before then.
         </p>
-        {data.photos.length > 0 && <SaveAll photos={ordered} name={data.name} />}
+        {ordered.length > 0 && <SaveAll photos={ordered} name={data.name} />}
       </header>
 
       {data.photos.length === 0 && (
         <Message title="Photos are on their way">The studio is still uploading. Check back in a few minutes.</Message>
+      )}
+
+      {takes.length > 0 && (
+        <section className="px-4 pb-10">
+          <h2 className="mx-auto mb-3 max-w-3xl text-sm font-medium text-stone-500">
+            Your flipbook{takes.length > 1 ? 's' : ''} · tap to pause, slide to flip
+          </h2>
+          <div className={`mx-auto grid max-w-3xl gap-6 ${takes.length > 1 ? 'sm:grid-cols-2' : ''}`}>
+            {takes.map((t) => (
+              <GalleryTake key={t.id} pages={t.pages} fps={t.fps} name={data.name} single={takes.length === 1} />
+            ))}
+          </div>
+        </section>
       )}
 
       {framed.length > 0 && (
@@ -137,6 +159,59 @@ function Message({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+function GalleryTake({
+  pages,
+  fps,
+  name,
+  single,
+}: {
+  pages: GalleryPhoto[]
+  fps: number
+  name: string
+  single: boolean
+}) {
+  const [state, setState] = useState<'idle' | 'busy' | 'error'>('idle')
+
+  async function download() {
+    setState('busy')
+    try {
+      const blobs = await Promise.all(
+        pages.map(async (p) => {
+          const res = await fetch(publicApi.photoUrl(p.id, 'full'))
+          if (!res.ok) throw new Error('Download failed')
+          return res.blob()
+        }),
+      )
+      const zip = await zipFiles(blobs.map((blob, i) => ({ name: pageFileName(i), blob })))
+      downloadBlob(zip, `${(name || 'flipbook').replace(/[^\w-]+/g, '-').slice(0, 30)}-flipbook.zip`)
+      setState('idle')
+    } catch {
+      setState('error')
+    }
+  }
+
+  return (
+    <div className={single ? 'mx-auto w-full max-w-lg' : ''}>
+      <FlipbookPlayer
+        frames={pages.map((p) => publicApi.photoUrl(p.id, 'thumb'))}
+        fps={fps}
+        className="[&_button]:shadow-lg [&_button]:ring-1 [&_button]:ring-black/5"
+      />
+      <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+        <span className="text-stone-500">{pages.length} pages</span>
+        <button
+          type="button"
+          onClick={download}
+          disabled={state === 'busy'}
+          className="rounded-full bg-white px-4 py-2 font-medium shadow ring-1 ring-black/5 disabled:opacity-60"
+        >
+          {state === 'busy' ? 'Preparing…' : state === 'error' ? 'Failed. Try again' : 'Download pages (.zip)'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function SaveAll({ photos, name }: { photos: GalleryPhoto[]; name: string }) {
   const [state, setState] = useState<
     { step: 'idle' } | { step: 'loading'; done: number } | { step: 'ready'; files: File[] } | { step: 'error'; msg: string }
@@ -160,9 +235,7 @@ function SaveAll({ photos, name }: { photos: GalleryPhoto[]; name: string }) {
         // Share needs a fresh tap, so ask for one more click.
         setState({ step: 'ready', files })
       } else {
-        const entries = await Promise.all(files.map(async (f) => [f.name, new Uint8Array(await f.arrayBuffer())] as const))
-        const zip = zipSync(Object.fromEntries(entries), { level: 0 }) // JPEGs don't compress further
-        downloadBlob(new Blob([zip], { type: 'application/zip' }), `${base}.zip`)
+        downloadBlob(await zipFiles(files.map((f) => ({ name: f.name, blob: f }))), `${base}.zip`)
         setState({ step: 'idle' })
       }
     } catch (e) {

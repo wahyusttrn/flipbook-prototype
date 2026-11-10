@@ -47,6 +47,24 @@ end $$;
 
 create index if not exists photos_session_idx on public.photos (session_id, kind, created_at);
 
+-- ── Video takes (flipbook) ──────────────────────────────────────────────
+-- A take = frames sampled from one video in the browser (the video itself is never uploaded).
+-- Its frames are photos with kind = 'frame', ordered by frame_index = flipbook page order.
+create table if not exists public.takes (
+  id          uuid primary key default gen_random_uuid(),
+  session_id  uuid not null references public.sessions(id) on delete cascade,
+  fps         numeric not null,                   -- sampling rate used (frames per second of video)
+  source_name text not null default '',           -- original video file name, for staff
+  created_at  timestamptz not null default now()
+);
+create index if not exists takes_session_idx on public.takes (session_id, created_at);
+
+alter table public.photos add column if not exists take_id uuid references public.takes(id) on delete cascade;
+alter table public.photos add column if not exists frame_index int;
+alter table public.photos drop constraint if exists photos_kind_check;
+alter table public.photos add constraint photos_kind_check check (kind in ('raw', 'framed', 'frame'));
+create index if not exists photos_take_idx on public.photos (take_id, frame_index) where take_id is not null;
+
 -- ── Row Level Security ────────────────────────────────────────────────────
 -- Admin UI (logged-in user) reads/writes directly. The public gallery never
 -- touches these tables; it goes through the API, which checks expiry.
@@ -55,15 +73,19 @@ create index if not exists photos_session_idx on public.photos (session_id, kind
 alter table public.sessions  enable row level security;
 alter table public.templates enable row level security;
 alter table public.photos    enable row level security;
+alter table public.takes     enable row level security;
 
 drop policy if exists "staff all sessions"  on public.sessions;
 drop policy if exists "staff all templates" on public.templates;
 drop policy if exists "staff read photos"   on public.photos;
+drop policy if exists "staff read takes"    on public.takes;
 
 create policy "staff all sessions"  on public.sessions  for all    to authenticated using (true) with check (true);
 create policy "staff all templates" on public.templates for all    to authenticated using (true) with check (true);
 -- photo rows are written by the API (service role) together with the file upload
 create policy "staff read photos"   on public.photos    for select to authenticated using (true);
+-- takes are created/deleted by the API together with their frames
+create policy "staff read takes"    on public.takes     for select to authenticated using (true);
 
 -- ── Storage bucket ────────────────────────────────────────────────────────
 -- Private bucket for photos + frame overlays. No storage policies on purpose:

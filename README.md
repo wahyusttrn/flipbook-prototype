@@ -1,7 +1,8 @@
 # Flipbook: self-photo studio prototype
 
-Staff create a session, upload the camera photos, put them into a frame, and the
-customer scans a QR code to see and download everything. Links expire after 10 days.
+Staff create a session, upload the camera photos and/or a **video take**, which is turned into **flipbook pages** in
+the browser (the video is never uploaded). They can also put photos into a frame. The customer scans a QR code to watch
+their flipbook, see the photos and download everything. Links expire after 10 days.
 
 ```
 Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → server/app.ts)
@@ -14,7 +15,7 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
 - **API** (`server/app.ts`, served by `api/index.ts` on Vercel): the only thing that touches the private storage bucket.
   Serves photos only while a session is valid, handles uploads, and a daily Vercel Cron deletes expired sessions' files.
 - **Supabase**: admin login, tables and photo storage (private bucket `photos`), all from `supabase/schema.sql`.
-- Image resizing and frame compositing happen **in the browser**, so no server image processing is needed.
+- Image resizing, video frame extraction and frame compositing happen **in the browser**, so no server media processing is needed.
 
 > Working on this with an AI agent? See [`AGENTS.md`](AGENTS.md) for the full architecture and conventions.
 
@@ -28,6 +29,7 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
 1. **Install**: `pnpm install`
 2. **Supabase**
    - SQL Editor → run `supabase/schema.sql` (creates tables, access rules **and** the storage bucket; safe to re-run).
+     **Re-run it whenever it changes** (e.g. after pulling the flipbook update, which added the `takes` table).
    - Authentication → Sign In / Providers → **turn off "Allow new users to sign up"**.
      Any logged-in user is treated as staff, so this matters.
    - Authentication → Users → **Add user** (email + password) for each staff member.
@@ -63,9 +65,16 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
    (e.g. 1200×1800 for 4R, 600×1800 for a 2×6 strip). Holes are detected automatically; fine-tune numbers if needed.
    Three ready-made frames are included as one-click samples (`public/sample-frames/`): **Classic strip** (2×6, 4 photos),
    **Film 35mm** (4R, 3 photos) and **Pastel party** (4R, 6 photos).
-2. **Sessions → Create** → upload photos → pick a frame, tap a slot, tap a photo → **Save framed photo**.
-3. Show the QR ("Show QR to customer") or copy the link. The customer gets the framed result + all shots,
-   with "Save all to phone" (share sheet) or a .zip on desktop.
+2. **Sessions → Create** → drop **photos** (JPEG/PNG) and/or a **video** (MP4/MOV) into the upload area.
+   - **Video → flipbook**: the app reads the video's frame rate and takes every Nth frame to get close to the chosen
+     pages per second (default **12**: 24 fps → every 2nd frame, 60 fps → every 5th, 30 fps → every 3rd = 10/s). A 6 s take
+     at 12/s = **72 pages**. Trim start/end if needed. Choose **upload all automatically** or **review and pick pages**
+     (remembered per computer). Max 240 pages per take. Record **H.264 (8-bit)**; some 10-bit/HEVC camera modes can't
+     be read by browsers.
+   - **Frames**: pick a frame, tap a slot, tap a photo → **Save framed photo**.
+3. Show the QR ("Show QR to customer") or copy the link. The customer sees their **flipbook playing** (with
+   "Download pages (.zip)"), the framed results and all shots, with "Save all to phone" (share sheet) or a .zip on desktop.
+   Staff can also download a take's pages as `page-001.jpg …` from the session page (e.g. to print them).
 4. Expired links show an "expired" page. **+30 days** extends (e.g. after the customer pays).
    `PURGE_GRACE_DAYS` (default 3) after expiry, the daily cron deletes the files from storage.
 
@@ -97,12 +106,14 @@ anytime within that hour.
 ## Free-tier limits to keep in mind
 
 Supabase free: **1 GB** file storage, **~5 GB/month** egress (every gallery view/download counts), and the project
-**pauses after ~1 week idle**. At ~20 MB per session that's ~50 live sessions. Fine for a prototype; if it gets tight,
+**pauses after ~1 week idle**. At ~20 MB per session (a 72-page take is ~15–25 MB) that's ~40–50 live sessions. Fine for a prototype; if it gets tight,
 move photos to Cloudflare R2 (10 GB free, free egress). Only the storage helpers in `server/app.ts` need to change.
 
 ## Not built yet (on purpose)
 
-- Printing (frames already render at 300 DPI print size, so it's just a print step after "Save framed photo")
+- **Printing the flipbook** (page layout with a binding margin, page numbers, several pages per sheet with cut lines).
+  Pages are stored in order per take, ready for this.
+- Printing framed photos (frames already render at 300 DPI print size, so it's just a print step after "Save framed photo")
 - Auto-import from the camera folder (File System Access API watching the tether folder)
 - Payment for extensions (manual +30 days button for now)
 - Per-slot pan/zoom in the frame editor (photos are centre-cropped to fill the slot)

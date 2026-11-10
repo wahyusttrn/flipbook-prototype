@@ -4,12 +4,14 @@ import { AdminImage } from '../components/AdminImage'
 import { Composer } from '../components/Composer'
 import { QrCode } from '../components/QrCode'
 import { SessionStatus } from '../components/SessionStatus'
+import { TakeCard } from '../components/TakeCard'
 import { Button, Card, ErrorText, Spinner } from '../components/ui'
 import { Uploader } from '../components/Uploader'
+import { VideoImporter } from '../components/VideoImporter'
 import { adminApi } from '../lib/api'
 import { downloadBlob } from '../lib/download'
 import { DAY_MS, formatDate, publicLink } from '../lib/format'
-import type { Photo, Session, Template } from '../lib/shared'
+import type { Photo, Session, Take, Template } from '../lib/shared'
 import { supabase } from '../lib/supabase'
 
 const EXTEND_DAYS = 30
@@ -20,6 +22,9 @@ export function SessionDetail() {
   const [session, setSession] = useState<Session | null>(null)
   const [photos, setPhotos] = useState<Photo[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
+  const [takes, setTakes] = useState<Take[]>([])
+  /** Video currently being turned into flipbook pages */
+  const [importing, setImporting] = useState<File | null>(null)
   const [error, setError] = useState<unknown>(null)
   const [showQr, setShowQr] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -29,12 +34,14 @@ export function SessionDetail() {
       supabase.from('sessions').select('*').eq('id', id).single(),
       supabase.from('photos').select('*').eq('session_id', id).order('created_at'),
       supabase.from('templates').select('*').order('created_at'),
-    ]).then(([s, p, t]) => {
-      const err = s.error ?? p.error ?? t.error
+      supabase.from('takes').select('*').eq('session_id', id).order('created_at'),
+    ]).then(([s, p, t, k]) => {
+      const err = s.error ?? p.error ?? t.error ?? k.error
       if (err) return setError(err)
       setSession(s.data)
       setPhotos(p.data ?? [])
       setTemplates(t.data ?? [])
+      setTakes(k.data ?? [])
     })
   }, [id])
 
@@ -44,6 +51,8 @@ export function SessionDetail() {
   const link = publicLink(session.slug)
   const raw = photos.filter((p) => p.kind === 'raw')
   const framed = photos.filter((p) => p.kind === 'framed')
+  const framesOf = (takeId: string) =>
+    photos.filter((p) => p.take_id === takeId).sort((a, b) => (a.frame_index ?? 0) - (b.frame_index ?? 0))
   const purged = !!session.purged_at
 
   async function extend() {
@@ -79,6 +88,17 @@ export function SessionDetail() {
     try {
       await adminApi.deletePhoto(p.id)
       setPhotos((all) => all.filter((x) => x.id !== p.id))
+    } catch (e) {
+      setError(e)
+    }
+  }
+
+  async function removeTake(take: Take) {
+    if (!window.confirm('Delete this flipbook take and all its pages?')) return
+    try {
+      await adminApi.deleteTake(take.id)
+      setTakes((all) => all.filter((t) => t.id !== take.id))
+      setPhotos((all) => all.filter((p) => p.take_id !== take.id))
     } catch (e) {
       setError(e)
     }
@@ -147,14 +167,47 @@ export function SessionDetail() {
         <>
           <Card className="space-y-4">
             <h2 className="font-display text-xl">
-              1. Photos <span className="text-base text-stone-400">({raw.length})</span>
+              1. Photos & video <span className="text-base text-stone-400">({raw.length} photos)</span>
             </h2>
-            <Uploader sessionId={session.id} onUploaded={(p) => setPhotos((all) => [...all, p])} />
+            <Uploader
+              sessionId={session.id}
+              onUploaded={(p) => setPhotos((all) => [...all, p])}
+              onVideo={setImporting}
+            />
+            {importing && (
+              <VideoImporter
+                key={`${importing.name}-${importing.lastModified}-${importing.size}`}
+                file={importing}
+                sessionId={session.id}
+                onDone={(take, frames) => {
+                  setTakes((all) => [...all, take])
+                  setPhotos((all) => [...all, ...frames])
+                }}
+                onClose={() => setImporting(null)}
+              />
+            )}
             {raw.length > 0 && <PhotoGrid photos={raw} onDelete={removePhoto} />}
           </Card>
 
           <Card className="space-y-4">
-            <h2 className="font-display text-xl">2. Frame</h2>
+            <h2 className="font-display text-xl">
+              2. Flipbook <span className="text-base text-stone-400">({takes.length} {takes.length === 1 ? 'take' : 'takes'})</span>
+            </h2>
+            {takes.length === 0 ? (
+              <p className="text-sm text-stone-500">
+                Drop a video above to turn it into flipbook pages. Takes show up here and play in the customer gallery.
+              </p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {takes.map((t) => (
+                  <TakeCard key={t.id} take={t} frames={framesOf(t.id)} onDelete={() => removeTake(t)} />
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <Card className="space-y-4">
+            <h2 className="font-display text-xl">3. Frame</h2>
             <Composer
               sessionId={session.id}
               rawPhotos={raw}
@@ -165,7 +218,7 @@ export function SessionDetail() {
 
           <Card className="space-y-4">
             <h2 className="font-display text-xl">
-              3. Framed results <span className="text-base text-stone-400">({framed.length})</span>
+              4. Framed results <span className="text-base text-stone-400">({framed.length})</span>
             </h2>
             {framed.length === 0 ? (
               <p className="text-sm text-stone-500">Saved frames show up here and in the customer gallery.</p>

@@ -7,18 +7,20 @@ guide; this file is the detailed one. **Keep both up to date** (see [Docs rule](
 
 ## 1. Product context
 
-**Flipbook** is a prototype (MVP) for a **walk-in self-photo studio that also prints**.
+**Flipbook** is a prototype (MVP) for a **walk-in self-photo studio that also prints**. The client's main product is a
+**printed video flipbook**: a short video take becomes ~60–80 pages that are printed, cut and bound, so flipping them plays the clip.
 
 Real-world flow at the studio:
-1. Customer shoots in the booth with a **mirrorless camera** (remote shutter).
-2. Staff create a **session** and **upload the photos manually** (auto-import is deferred).
+1. Customer shoots in the booth with a **mirrorless camera**: photos and/or **~6 s video takes**.
+2. Staff create a **session** and **upload photos manually** and/or drop a **video**, which the browser turns into flipbook
+   pages (only the chosen frames are uploaded; the video never leaves the studio PC). Auto-import is deferred.
 3. Staff (or customer at the station) pick a **frame template** and place photos into its slots.
 4. Customer gets a **QR code / public link** → gallery with the framed result + all raw shots.
 5. Link is valid **10 days**. Staff can extend (**+30 days**), intended for after a payment.
 6. Files are deleted from storage **3 days after expiry** by a cron.
 
 Deliberately **out of scope for now** (user decisions, 2026-11-07). Don't build them unless asked:
-- **Printing**: print size and printer model are undecided. Frames already render at full template
+- **Printing** (flipbook and framed photos): print size and printer model are undecided. Frames already render at full template
   resolution (designed at 300 DPI), so printing will be a step after compositing.
 - **Camera-folder auto-import**: later via the File System Access API (`showDirectoryPicker`) polling the tether folder.
 - **Payment gateway** for extensions: manual "+30 days" button instead (Midtrans/Xendit later, QRIS context: Indonesia).
@@ -30,6 +32,10 @@ Hosting decision (2026-11-08): the user deploys on **Vercel**. The API was first
 Vercel Function; Cloudflare is no longer used anywhere.
 Storage decision (2026-11-08): the user chose **Supabase Storage over Cloudflare R2** to avoid extra setup for the
 prototype, accepting the 1 GB / ~5 GB egress limits. R2 is the planned upgrade path if limits bite (see §11).
+
+Flipbook decisions (2026-11-10): default **12 pages per second** (user's client asked for ~11; 12 lands exactly on 24/60 fps
+frames). Staff choose per import between **auto** (upload all) and **pick** (review grid). PNG photos are accepted and
+stored as JPEG like everything else (user: keep that).
 
 ---
 
@@ -85,6 +91,12 @@ Key design decisions (and why):
 - **Lazy-only deps must be pre-bundled**: anything imported only from lazy admin routes goes in `optimizeDeps.include`
   (`vite.config.ts`). Otherwise Vite discovers it on first visit, re-optimizes, and the chunk import fails
   ("Failed to fetch dynamically imported module"). Currently: `@supabase/supabase-js`, `qrcode`, `fflate`.
+- **Video never leaves the browser** (`src/lib/video.ts`): a `<video>` element decodes the take, `detectFps()` measures the
+  real frame rate from `requestVideoFrameCallback` timestamps (½ s of muted playback, smallest gap, snapped to the
+  *closest* standard rate, since 24 vs 23.976 is only 0.1%), `planFrames()` picks every Nth source frame whose rate is
+  closest to the target and aims at the **middle** of each frame `(f + 0.5) / fps` so seeks never land on a neighbour;
+  without a detected fps it samples by time (`start + k/target + 1ms`). Frames are drawn to canvas → JPEG (≤1920px, q0.85)
+  + 480px thumb, then uploaded as photos with `kind: 'frame'`. Verified with frame-numbered ffmpeg videos (§10).
 - **Gallery bundle is kept small**: admin routes are lazy-loaded and `src/lib/publicApi.ts` has no Supabase import.
   Don't import `supabase.ts` / `api.ts` from `pages/Gallery.tsx` or anything it imports.
 
@@ -112,6 +124,8 @@ src/lib/supabase.ts        Browser supabase client + isSupabaseConfigured (place
 src/lib/publicApi.ts       ApiError + public endpoints (NO supabase import)
 src/lib/api.ts             Authed request() + adminApi (uploads, deletes, photoBlob cache); re-exports publicApi
 src/lib/image.ts           decode, loadImage, resizeToJpeg, prepareUpload, drawCover, composeFrame, detectSlots, toBlob
+src/lib/video.ts           loadVideo, detectFps, planFrames, extractFrames, disposeVideo, VideoReadError (browser-only)
+src/lib/zip.ts             zipFiles([{name, blob}]) via fflate (level 0), pageFileName(i) → page-001.jpg
 src/lib/download.ts        downloadBlob(blob, filename)
 src/lib/format.ts          DAY_MS, formatDate, formatDateTime, daysLeft, publicLink
 src/lib/slug.ts            randomSlug(): 10 chars, no look-alike characters
@@ -120,12 +134,17 @@ src/components/ui.tsx      Button (primary|secondary|ghost|danger), Spinner, Car
 src/components/useAuth.ts  Supabase session hook (undefined = loading, null = logged out)
 src/components/RequireAuth.tsx, SetupNotice.tsx, AdminLayout.tsx
 src/components/AdminImage.tsx   <img> for admin-only photos (fetched as blob with auth header)
-src/components/Uploader.tsx     Drag/drop + picker, resize, upload with concurrency 2
+src/components/Uploader.tsx     Drag/drop + picker: images → resize + upload (concurrency 2); a video → onVideo(file)
+src/components/VideoImporter.tsx  Video → pages: preview, fps detection, pages/s select, trim, auto/pick mode (localStorage
+                                `flipbook:rate`, `flipbook:mode`), extract, review grid, createTake + upload (concurrency 4)
+src/components/FlipbookPlayer.tsx Animated page player (preloads, tap = play/pause, slider = flip). No Supabase import (gallery uses it)
+src/components/TakeCard.tsx     Admin take: player, "Download pages" zip, delete
 src/components/Composer.tsx     Frame picker, slot assignment, live preview, full-res render + upload
 src/components/RouteError.tsx  App error page; auto-reloads once (sessionStorage flag) when a lazy chunk fails to load
 src/components/QrCode.tsx, SessionStatus.tsx
 
-src/pages/Login.tsx, Sessions.tsx (list + create), SessionDetail.tsx (link/QR, upload, compose, results),
+src/pages/Login.tsx, Sessions.tsx (list + create), SessionDetail.tsx (link/QR, 1 photos & video, 2 flipbook takes,
+          3 frame composer, 4 framed results),
           Templates.tsx (frames list + new frame with auto slot detection), Gallery.tsx (public), NotFound.tsx
 
 public/sample-frames/      Sample frames (SVG, transparent holes), listed in SAMPLES in Templates.tsx:
@@ -142,14 +161,17 @@ public/sample-frames/      Sample frames (SVG, transparent holes), listed in SAM
 ```
 sessions  id uuid PK, slug text UNIQUE, name text, created_at, expires_at (default now()+10d), purged_at nullable
 templates id uuid PK, name, width int, height int, overlay_key text, slots jsonb [{x,y,w,h}], created_at
-photos    id uuid PK, session_id → sessions ON DELETE CASCADE, kind 'raw'|'framed', storage_key, thumb_key,
-          width, height, template_id → templates ON DELETE SET NULL, created_at
+takes     id uuid PK, session_id → sessions ON DELETE CASCADE, fps numeric (actual pages/s), source_name, created_at
+photos    id uuid PK, session_id → sessions ON DELETE CASCADE, kind 'raw'|'framed'|'frame', storage_key, thumb_key,
+          width, height, template_id → templates ON DELETE SET NULL,
+          take_id → takes ON DELETE CASCADE + frame_index (page order, 0-based): only for kind 'frame', created_at
 ```
 
 Session state is derived, not stored: **expired** = `purged_at IS NOT NULL OR expires_at <= now()` (`isExpired()`).
 `purged_at` set = files are gone; UI disables extend/upload.
 
-**RLS**: `authenticated` has full access to `sessions` and `templates`, **select only** on `photos`.
+**RLS**: `authenticated` has full access to `sessions` and `templates`, **select only** on `photos` and `takes`
+(takes and their frames are written by the API).
 `anon` has nothing. The API uses the service role. Because "authenticated == staff", **public sign-ups must be
 disabled** in Supabase; `ADMIN_EMAILS` is an extra allowlist enforced by the API only (not by RLS).
 
@@ -158,11 +180,11 @@ update types in `src/lib/shared.ts`, and note in both docs that the SQL must be 
 
 ### Storage layout (bucket `photos`, `storageKeys` in shared.ts)
 ```
-sessions/{sessionId}/{raw|framed}/{photoId}.jpg
-sessions/{sessionId}/{raw|framed}/{photoId}_thumb.jpg
+sessions/{sessionId}/{raw|framed|frame}/{photoId}.jpg
+sessions/{sessionId}/{raw|framed|frame}/{photoId}_thumb.jpg
 templates/{templateId}.png
 ```
-Deleting a session = list + remove the `sessions/{id}/raw` and `sessions/{id}/framed` folders (`deleteSessionFiles`;
+Deleting a session = list + remove the `sessions/{id}/raw`, `/framed` and `/frame` folders (`deleteSessionFiles`;
 Supabase `list()` is one level deep, so new kinds need adding there). Bucket limits: 25 MB per file, JPEG/PNG only.
 An older schema had `photos.r2_key`; `schema.sql` renames it to `storage_key` if present.
 
@@ -173,11 +195,13 @@ An older schema had `photos.r2_key`; `schema.sql` renames it to `storage_key` if
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/health` | none | `{ok, error?}`; 503 if env missing |
-| GET | `/api/public/sessions/:slug` | none | `PublicSession`: `{status:'ok', name, expires_at, photos[]}` or `{status:'expired', …}`; 404 unknown |
+| GET | `/api/public/sessions/:slug` | none | `PublicSession`: `{status:'ok', name, expires_at, photos[] (incl. take_id, frame_index), takes[{id,fps}]}` or `{status:'expired', …}`; 404 unknown |
 | GET | `/api/public/photos/:id/:variant(full\|thumb)[?download=1]` | none | Streams from storage; **410 if expired** |
 | GET | `/api/templates/:id/overlay` | none | Frame PNG (needed same-origin for canvas) |
 | GET | `/api/admin/photos/:id/:variant` | staff | Same as public but ignores expiry |
-| POST | `/api/admin/sessions/:id/photos` | staff | multipart `full`, `thumb` (image/jpeg), `kind`, `width`, `height`, `template_id?` → photo row |
+| POST | `/api/admin/sessions/:id/photos` | staff | multipart `full`, `thumb` (image/jpeg), `kind`, `width`, `height`, `template_id?`; for `kind=frame` also `take_id` (must belong to the session) + `frame_index` (0…239) → photo row |
+| POST | `/api/admin/sessions/:id/takes` | staff | JSON `{fps (1–60), source_name}` → take row |
+| DELETE | `/api/admin/takes/:id` | staff | All its frame files, then the take (frame rows cascade) |
 | DELETE | `/api/admin/photos/:id` | staff | Files + row |
 | DELETE | `/api/admin/sessions/:id` | staff | Session folders + row (photos cascade) |
 | POST | `/api/admin/templates` | staff | multipart `overlay` (image/png), `name`, `width`, `height`, `slots` (JSON, 1–20) |
@@ -195,7 +219,7 @@ Conventions:
 - Storage helpers: `putObject`, `removeObjects` (batches of 100), `serveObject`, `deleteSessionFiles`. All storage access goes
   through these, so switching to R2 later only means changing them (via R2's S3 API with keys in env).
 - Cron: `purgeExpired()` is idempotent (Vercel may skip or repeat runs) and handles ≤50 sessions per run whose `expires_at < now - PURGE_GRACE_DAYS`, deletes the session's files and
-  photo rows, sets `purged_at`. The session row is kept so the gallery can still say "expired".
+  photo rows and takes, sets `purged_at`. The session row is kept so the gallery can still say "expired".
 - Images are served with `cache-control: private, max-age=3600`. After expiry a cached copy can live up to 1 h on the device. Acceptable.
 
 ---
@@ -205,6 +229,15 @@ Conventions:
 ### Upload (`Uploader.tsx` → `prepareUpload` → `adminApi.uploadPhoto`)
 Camera JPEG → `createImageBitmap(file, {imageOrientation:'from-image'})` (respects EXIF rotation) →
 full JPEG at **long edge 2400px, q0.88** + thumb **480px, q0.8** → multipart POST. Concurrency 2, per-file errors listed.
+
+### Video → flipbook (`VideoImporter.tsx`, `lib/video.ts`)
+Drop a video (MP4/MOV/WebM; `.mov` with an empty MIME type is detected by extension) → importer opens under the drop zone.
+It shows the source fps + duration, a pages-per-second select (8/10/**12**/15/24), start/end trim ("use video position"
+copies the preview's current time), and a summary like "every 2nd frame → 12 pages/s → 72 pages". More than
+`MAX_TAKE_FRAMES` (240) is blocked. **Auto**: extract → `createTake` → upload all. **Pick**: extract → review grid (tap to
+exclude, animated preview of the selection) → upload chosen. `frame_index` is the position among the *uploaded* pages
+(contiguous 0…n-1). Partial upload failures keep the take with the pages that made it, and list the failures.
+Undecodable files → `VideoReadError` with the H.264 hint. Seeking: ~50 ms/frame, so a 72-page take extracts in ~4 s.
 
 ### Frames / templates (`Templates.tsx`)
 Upload PNG/SVG/WebP → rasterised to PNG at natural size → `detectSlots()` finds connected **transparent**
@@ -225,6 +258,8 @@ Never pre-load full images for grids.
 
 ### Public gallery (`Gallery.tsx`)
 States: loading / 404 "Link not found" / error / expired / empty ("photos are on their way") / ok.
+Flipbook takes come first: `FlipbookPlayer` over the pages' **thumbs** at the take's fps + "Download pages (.zip)" (full
+size, `page-001.jpg …`). Frames are **excluded** from the lightbox, "All shots" and "Save all".
 Framed first (served **full size**: few and the hero, thumbs look soft on phones), then raw grid (thumbs); lightbox with keyboard + tap zones + download (`?download=1`).
 "Save all": on devices that can share files → fetch all, then a **second tap** opens `navigator.share({files})`
 (share needs a fresh user gesture); otherwise zip with `fflate.zipSync(level 0)` and download.
@@ -302,11 +337,16 @@ Verifying the Vercel build without deploying (done 2026-11-08): write a placehol
 
 Browser-only code (`src/lib/image.ts`) can't run in Node (no canvas). To test it, serve a temporary HTML page from
 `public/` that imports `/src/lib/image.ts`, open it in headless Chrome via the DevTools protocol (`--dump-dom` dumps
-before async module code finishes, so poll with `Runtime.evaluate`), then **delete the temp page**. Expected results on the
+before async module code finishes, so poll with `Runtime.evaluate`), then **delete the temp page**. Video extraction test (2026-11-10): ffmpeg makes 6 s 1080p H.264
+videos where frame N has a white bar at x = N·5 (`geq=lum='if(between(X,N*5,N*5+4),235,16)'`, at 24, 24000/1001, 30, 60 fps)
+plus a random-bytes `broken.mp4`; a temp page in `public/` extracts them and reads the bar position back. Expected at 12/s:
+24 → frames 0,2,4…142 (72 pages), 23.976 → same, 30 → 0,3,6…177 (60 pages, 10/s), 60 → 0,5…355 (72), broken →
+VideoReadError. Headless Chrome needs `--autoplay-policy=no-user-gesture-required` for `detectFps`. Expected results on the
 samples: classic-strip → 4 slots ≈ `{33,33,534,378}`…; film-35mm → 3 ≈ `{147,57,906,492}`…;
 pastel-party → 6 ≈ `{57,237,531,456}`… (detected boxes are ~3px larger than the holes on purpose).
 
-End-to-end against the real project (done 2026-11-08, all 46 checks passed, again after the Vercel port). Method, if you repeat it:
+End-to-end against the real project (2026-11-08: 46 checks; 2026-11-10 with flipbook: **79 checks** = setup 8, API 15,
+admin+gallery UI 14, flipbook API 16, flipbook UI 17, lifecycle 9). Method, if you repeat it:
 - Use a **temporary staff user** created with the service key (`auth.admin.createUser`, `email_confirm: true`) and sign in
   with the publishable key. Never ask for or use the owner's password. **Delete the user and all test rows/files after.**
 - Test scripts and fixtures live in the scratchpad, not the repo. Run Node scripts that need `@supabase/supabase-js` from the
@@ -318,6 +358,11 @@ End-to-end against the real project (done 2026-11-08, all 46 checks passed, agai
 - Run your own dev server on a separate port (`pnpm dev --port 5199 --strictPort`) as a tracked background task and stop
   it by task/PID. **Never `pkill` vite or delete `node_modules/.vite`**: the user may have their own dev server running.
 - The installed frames are in the project, so the composer opens on "Classic strip"; a UI test must click its own test frame first.
+- Flipbook UI test: feed videos with CDP `DOM.setFileInputFiles` on the uploader's `input[type=file]` (a realistic
+  `testsrc2` 1080p 24p `.mov` for auto mode, the frame-numbered MP4 for pick mode), then decode the bar positions of the
+  uploaded pages to prove order (pick mode leaving out pages 1–2 must give source frames 4, 6, 8…142).
+- **Object URLs in effects**: create and revoke them in the *same* effect. React's dev double-mount once revoked a URL
+  created in `useState` and the importer reported "can't read this video" for a perfectly fine file.
 
 ---
 
@@ -342,7 +387,11 @@ End-to-end against the real project (done 2026-11-08, all 46 checks passed, agai
 
 ## 12. Roadmap hints (when the user asks)
 
-- **Printing**: after compositing, print the framed canvas: a print-only page sized to the paper with `@page { size: 4in 6in; margin: 0 }`,
+- **Flipbook printing** (the client's goal): pages are ordered per take (`frame_index`). Typical layout: a page ~3×2" with a
+  ~0.5–0.75" binding margin on the bound edge, small page numbers for collating, a cover page, several pages per 4R/A4
+  sheet with cut marks, printed in order so page 1 ends up on top. Generate print sheets in the browser (canvas → PDF or
+  print CSS) from the full-size frames.
+- **Printing framed photos**: after compositing, print the framed canvas: a print-only page sized to the paper with `@page { size: 4in 6in; margin: 0 }`,
   run the station Chrome with `--kiosk-printing` to skip the dialog. Add the QR code onto the print (the slug exists before compositing).
   Printing must not wait for uploads: compose locally → print → upload in background.
 - **Auto-import**: File System Access API on the station PC, poll the tether folder, feed new files into `Uploader`'s pipeline.

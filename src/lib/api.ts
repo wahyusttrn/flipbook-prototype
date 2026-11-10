@@ -1,6 +1,6 @@
 import { ApiError } from './publicApi'
 import { supabase } from './supabase'
-import type { Photo, PhotoKind, PhotoVariant, Slot, Template } from './shared'
+import type { Photo, PhotoKind, PhotoVariant, Slot, Take, Template } from './shared'
 
 export { ApiError, publicApi } from './publicApi'
 
@@ -29,6 +29,9 @@ export interface UploadPhotoInput {
   width: number
   height: number
   templateId?: string
+  /** kind 'frame' only */
+  takeId?: string
+  frameIndex?: number
 }
 
 export const adminApi = {
@@ -40,8 +43,17 @@ export const adminApi = {
     form.set('width', String(input.width))
     form.set('height', String(input.height))
     if (input.templateId) form.set('template_id', input.templateId)
+    if (input.takeId) form.set('take_id', input.takeId)
+    if (input.frameIndex !== undefined) form.set('frame_index', String(input.frameIndex))
     return request<Photo>(`/api/admin/sessions/${input.sessionId}/photos`, { method: 'POST', body: form })
   },
+  createTake: (sessionId: string, fps: number, sourceName: string) =>
+    request<Take>(`/api/admin/sessions/${sessionId}/takes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fps, source_name: sourceName }),
+    }),
+  deleteTake: (id: string) => request<{ ok: true }>(`/api/admin/takes/${id}`, { method: 'DELETE' }),
   deletePhoto: (id: string) => request<{ ok: true }>(`/api/admin/photos/${id}`, { method: 'DELETE' }),
   deleteSession: (id: string) => request<{ ok: true }>(`/api/admin/sessions/${id}`, { method: 'DELETE' }),
   createTemplate(input: { name: string; overlay: Blob; width: number; height: number; slots: Slot[] }) {

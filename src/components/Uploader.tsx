@@ -6,14 +6,27 @@ import { Spinner } from './ui'
 
 const CONCURRENCY = 2
 
-/** Drop camera JPEGs here. Each is resized in the browser, then sent to Supabase Storage through the API. */
-export function Uploader({ sessionId, onUploaded }: { sessionId: string; onUploaded: (p: Photo) => void }) {
+/**
+ * Drop camera photos (resized in the browser, then uploaded through the API) or a video take
+ * (handed to onVideo, which turns it into flipbook pages locally).
+ */
+export function Uploader({
+  sessionId,
+  onUploaded,
+  onVideo,
+}: {
+  sessionId: string
+  onUploaded: (p: Photo) => void
+  onVideo: (file: File) => void
+}) {
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [failed, setFailed] = useState<string[]>([])
 
   async function upload(files: File[]) {
+    const video = files.find(isVideo)
+    if (video) onVideo(video)
     const images = files.filter((f) => f.type.startsWith('image/'))
     if (!images.length || progress) return
     setFailed([])
@@ -72,15 +85,17 @@ export function Uploader({ sessionId, onUploaded }: { sessionId: string; onUploa
           </>
         ) : (
           <>
-            <span className="font-medium">Drop photos here or click to choose</span>
-            <span className="text-stone-500">JPEGs from the camera. They're resized before upload.</span>
+            <span className="font-medium">Drop photos or a video here, or click to choose</span>
+            <span className="text-stone-500">
+              Photos: JPEG or PNG, resized before upload. Video (MP4/MOV): turned into flipbook pages on this computer.
+            </span>
           </>
         )}
       </button>
       <input
         ref={input}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,.mov,.mp4,.m4v,.webm"
         multiple
         hidden
         onChange={(e) => {
@@ -97,4 +112,9 @@ export function Uploader({ sessionId, onUploaded }: { sessionId: string; onUploa
       )}
     </div>
   )
+}
+
+/** Some systems report .mov files with an empty type, so also check the extension. */
+function isVideo(f: File) {
+  return f.type.startsWith('video/') || /\.(mov|mp4|m4v|webm)$/i.test(f.name)
 }
