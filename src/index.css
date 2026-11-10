@@ -12,6 +12,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* iPhone Safari zooms the page in when a field with text under 16px gets focus. Touch screens get 16px. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Checkerboard to show transparent areas of frame overlays */
 .checker {
   background-color: #fff;

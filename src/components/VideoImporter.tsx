@@ -281,8 +281,8 @@ export function VideoImporter({
                   {sourceFps ? `${sourceFps} fps` : 'Unknown frame rate (sampling by time)'} · {secs(duration)}
                 </p>
 
-                <label className="flex items-center gap-3">
-                  <span className="w-28 text-stone-600">Pages per second</span>
+                <label className="flex items-center gap-2 sm:gap-3">
+                  <span className="w-24 shrink-0 text-stone-600 sm:w-28">Pages per second</span>
                   <select
                     value={targetFps}
                     onChange={(e) => chooseRate(Number(e.target.value))}
@@ -310,8 +310,8 @@ export function VideoImporter({
                   {pageCount === 0 && ' · nothing selected, so check start/end'}
                 </p>
 
-                <label className="flex items-center gap-3">
-                  <span className="w-28 text-stone-600">Page design</span>
+                <label className="flex items-center gap-2 sm:gap-3">
+                  <span className="w-24 shrink-0 text-stone-600 sm:w-28">Page design</span>
                   <select
                     value={designId ?? ''}
                     onChange={(e) => {
@@ -451,8 +451,8 @@ function TrimRow({
   onUseCurrent: () => void
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <span className="w-28 text-stone-600">{label}</span>
+    <div className="flex items-center gap-2 sm:gap-3">
+      <span className="w-24 shrink-0 text-stone-600 sm:w-28">{label}</span>
       <input
         type="number"
         step={0.1}
@@ -461,11 +461,11 @@ function TrimRow({
         value={Math.round(value * 10) / 10}
         disabled={disabled}
         onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value) || 0)))}
-        className="w-20 rounded-lg border border-stone-300 bg-white px-2 py-1.5 tabular-nums"
+        className="w-16 rounded-lg border border-stone-300 bg-white px-2 py-1.5 tabular-nums sm:w-20"
       />
       <span className="text-stone-500">s</span>
-      <button type="button" onClick={onUseCurrent} disabled={disabled} className="text-xs text-stone-600 underline disabled:opacity-40">
-        use video position
+      <button type="button" onClick={onUseCurrent} disabled={disabled} className="py-2 text-xs whitespace-nowrap text-stone-600 underline disabled:opacity-40">
+        use video time
       </button>
     </div>
   )

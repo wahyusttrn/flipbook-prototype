@@ -188,7 +188,7 @@ export function TakeCard({
   const busyLabel = busy && (busy.what === 'saving' ? 'Saving…' : `${busyNames[busy.what]} ${busy.done}/${busy.total}…`)
 
   return (
-    <div className="space-y-3 rounded-xl bg-stone-50 p-3 ring-1 ring-stone-200">
+    <div className="min-w-0 space-y-3 rounded-xl bg-stone-50 p-3 ring-1 ring-stone-200">
       {urls ? (
         <FlipbookPlayer frames={urls} fps={take.fps} />
       ) : (

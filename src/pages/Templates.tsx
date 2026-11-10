@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { Button, Card, ErrorText, Spinner } from '../components/ui'
 import { adminApi, publicApi } from '../lib/api'
 import { detectSlots, loadImage, toBlob } from '../lib/image'
@@ -170,10 +170,18 @@ function NewTemplate({ onCreated }: { onCreated: (t: Template) => void }) {
             }}
           />
         </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-sm text-stone-500">Samples:</span>
         {SAMPLES.map((s) => (
-          <Button key={s.url} variant="secondary" onClick={() => load(s.url, s.name, s.kind)}>
-            Sample: {s.name}
-          </Button>
+          <button
+            key={s.url}
+            type="button"
+            onClick={() => load(s.url, s.name, s.kind)}
+            className="rounded-full bg-white px-3 py-1.5 text-sm ring-1 ring-stone-300 hover:bg-stone-100"
+          >
+            {s.name}
+          </button>
         ))}
       </div>
       <p className="text-sm text-stone-500">
@@ -186,10 +194,11 @@ function NewTemplate({ onCreated }: { onCreated: (t: Template) => void }) {
       <ErrorText error={error} />
 
       {draft && (
-        <div className="grid gap-6 md:grid-cols-[auto_1fr]">
+        <div className="grid gap-6 md:grid-cols-[auto_minmax(0,1fr)]">
+          {/* Phones: as wide as the screen allows (capped at 420px tall); desktop: 420px tall */}
           <div
-            className="checker relative mx-auto h-[420px] overflow-hidden rounded-lg ring-1 ring-stone-200"
-            style={{ aspectRatio: `${draft.width} / ${draft.height}` }}
+            className="checker relative mx-auto w-[min(100%,var(--preview-w))] overflow-hidden rounded-lg ring-1 ring-stone-200 md:h-[420px] md:w-auto"
+            style={{ aspectRatio: `${draft.width} / ${draft.height}`, '--preview-w': `${(420 * draft.width) / draft.height}px` } as CSSProperties}
           >
             <img src={draft.previewUrl} alt="" className="absolute inset-0 size-full" />
             {draft.slots.map((s, i) => (
@@ -256,7 +265,7 @@ function NewTemplate({ onCreated }: { onCreated: (t: Template) => void }) {
                             type="number"
                             value={s[k]}
                             onChange={(e) => updateSlot(i, k, Number(e.target.value))}
-                            className="w-20 rounded border border-stone-300 px-2 py-1 tabular-nums"
+                            className="w-full min-w-0 rounded border border-stone-300 px-1.5 py-1 tabular-nums sm:w-20 sm:px-2"
                           />
                         </td>
                       ))}
@@ -264,7 +273,7 @@ function NewTemplate({ onCreated }: { onCreated: (t: Template) => void }) {
                         <button
                           type="button"
                           onClick={() => setDraft({ ...draft, slots: draft.slots.filter((_, j) => j !== i) })}
-                          className="text-xs text-red-700 hover:underline"
+                          className="px-1 py-2 text-xs text-red-700 hover:underline"
                         >
                           remove
                         </button>

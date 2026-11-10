@@ -120,9 +120,9 @@ export function SessionDetail() {
           <Link to="/admin" className="text-sm text-stone-500 hover:text-stone-900">
             ← Sessions
           </Link>
-          <h1 className="font-display mt-1 flex items-center gap-3 text-3xl">
+          <h1 className="font-display mt-1 flex flex-wrap items-center gap-x-3 text-2xl sm:text-3xl">
             {session.name || 'Untitled session'}
-            <button type="button" onClick={rename} className="text-sm font-normal text-stone-400 hover:text-stone-900">
+            <button type="button" onClick={rename} className="-my-2 px-1 py-2 text-sm font-normal text-stone-400 hover:text-stone-900">
               rename
             </button>
           </h1>
@@ -281,7 +281,7 @@ function PhotoTile({ photo, onDelete, large }: { photo: Photo; onDelete: (p: Pho
         id={photo.id}
         className={`w-full ${large ? 'object-contain' : 'aspect-square object-cover'}`}
       />
-      <div className="absolute inset-x-1 bottom-1 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="absolute inset-x-1 bottom-1 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:opacity-100">
         <button type="button" onClick={save} className="rounded-md bg-white/90 px-2 py-1 text-xs font-medium shadow">
           Save
         </button>

@@ -85,7 +85,10 @@ export function Uploader({
           </>
         ) : (
           <>
-            <span className="font-medium">Drop photos or a video here, or click to choose</span>
+            <span className="font-medium">
+              <span className="pointer-coarse:hidden">Drop photos or a video here, or click to choose</span>
+              <span className="hidden pointer-coarse:inline">Tap to choose photos or a video</span>
+            </span>
             <span className="text-stone-500">
               Photos: JPEG or PNG, resized before upload. Video (MP4/MOV): turned into flipbook pages on this computer.
             </span>

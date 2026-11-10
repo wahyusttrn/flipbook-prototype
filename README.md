@@ -84,6 +84,7 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
      **Print PDF** (A4: 10 pages per sheet, Letter: 8) → print at **100% / Actual size**, cut on the grey lines, stack with
      the cover on top, staple on the left (page numbers sit in the binding margin).
    - **Frames**: pick a frame, tap a slot, tap a photo → **Save framed photo**.
+   - Everything above also works **on a phone** (e.g. uploading a take straight from an iPhone in Safari).
 3. Show the QR ("Show QR to customer") or copy the link. The customer sees their **flipbook video playing** with
    **Save video** (share sheet → Photos on phones, a download on computers) and **Save GIF** (built on their phone from the
    page thumbnails in a few seconds, 600 px, ~2–5 MB, same design and cover), the framed results and all shots, with

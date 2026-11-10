@@ -283,7 +283,7 @@ full JPEG at **long edge 2400px, q0.88** + thumb **480px, q0.8** → multipart P
 
 ### Video → flipbook (`VideoImporter.tsx`, `lib/video.ts`)
 Drop a video (MP4/MOV/WebM; `.mov` with an empty MIME type is detected by extension) → importer opens under the drop zone.
-It shows the source fps + duration, a pages-per-second select (8/10/**12**/15/24), start/end trim ("use video position"
+It shows the source fps + duration, a pages-per-second select (8/10/**12**/15/24), start/end trim ("use video time"
 copies the preview's current time), and a summary like "every 2nd frame → 12 pages/s → 72 pages". More than
 `MAX_TAKE_FRAMES` (240) is blocked. **Auto**: extract → `createTake` → upload all. **Pick**: extract → review grid (tap to
 exclude, animated preview of the selection) → upload chosen. `frame_index` is the position among the *uploaded* pages
@@ -343,7 +343,13 @@ Extend: `max(now, expires_at) + 30 days`. Rename via `window.prompt`. Delete via
 - **React Compiler is on**: don't add `useMemo`/`useCallback`/`memo` for performance. Plain `useState` + `useEffect`
   data loading; no global state library. Keep effects cancel-safe (`let alive = true` pattern).
 - **Styling**: Tailwind utility classes, stone palette, `font-display` (Fraunces) for headings. Reuse `ui.tsx` primitives
-  before writing new button/card styles. Admin is desktop-first; the gallery is **mobile-first**.
+  before writing new button/card styles. The gallery is **mobile-first**. The admin is laid out for the studio PC but
+  **must also work on a phone** (staff upload straight from an iPhone; 2026-11-10). Rules:
+  - Check new admin UI at **390 px**: nothing may stick out (iOS then zooms the whole page out). Grid/flex children that
+    hold inputs or button rows need `min-w-0`; fixed sizes need a phone variant (e.g. `w-16 sm:w-20`).
+  - No hover-only controls: pair `group-hover:` with `pointer-coarse:` (photo Save/Delete buttons).
+  - Form fields are 16 px on touch screens (`index.css`, `@media (pointer: coarse)`), otherwise iPhone Safari zooms in on focus.
+  - Touch wording via `pointer-coarse:` ("Tap to choose…" instead of "Drop … or click").
 - **Types shared with the API go in `src/lib/shared.ts`** (it's included in `tsconfig.server.json`). It must stay
   free of DOM/browser APIs and imports.
 - `tsconfig` is split: `tsconfig.app.json` (src), `tsconfig.server.json` (server/app.ts, api/, shared.ts),

@@ -33,7 +33,7 @@ export function Spinner({ className = 'size-6' }: { className?: string }) {
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-2xl bg-white p-5 ring-1 ring-stone-200 ${className}`}>{children}</section>
+  return <section className={`rounded-2xl bg-white p-4 ring-1 ring-stone-200 sm:p-5 ${className}`}>{children}</section>
 }
 
 export function ErrorText({ error }: { error: unknown }) {
