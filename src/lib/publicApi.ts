@@ -20,4 +20,5 @@ export const publicApi = {
   photoUrl: (id: string, variant: PhotoVariant, download = false) =>
     `/api/public/photos/${id}/${variant}${download ? '?download=1' : ''}`,
   overlayUrl: (templateId: string) => `/api/templates/${templateId}/overlay`,
+  takeVideoUrl: (takeId: string, download = false) => `/api/public/takes/${takeId}/video${download ? '?download=1' : ''}`,
 }

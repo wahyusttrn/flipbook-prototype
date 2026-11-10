@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+  <!-- Flipbook page design · 3×2 in at 600 DPI · one 16:9 photo hole (transparent).
+       The left 0.5 in (300 px) is the binding margin. Decorations stay opaque. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd3e1"/>
+      <stop offset="1" stop-color="#ffe9c9"/>
+    </linearGradient>
+    <mask id="hole">
+      <rect width="1800" height="1200" fill="white"/>
+      <rect x="350" y="90" width="1380" height="776" rx="36" fill="black"/>
+    </mask>
+    <path id="star" d="M0,-30 L8,-9 L30,-9 L12,4 L19,26 L0,12 L-19,26 L-12,4 L-30,-9 L-8,-9 Z"/>
+  </defs>
+  <g mask="url(#hole)">
+    <rect width="1800" height="1200" fill="url(#bg)"/>
+    <rect width="300" height="1200" fill="#ffc4d6"/>
+    <rect x="334" y="74" width="1412" height="808" rx="48" fill="#ffffff"/>
+  </g>
+  <use href="#star" transform="translate(410 1000) rotate(-12)" fill="#f7b733"/>
+  <use href="#star" transform="translate(1690 1110) rotate(16) scale(0.8)" fill="#7fc8a9"/>
+  <circle cx="520" cy="1120" r="11" fill="#7fc8a9"/>
+  <circle cx="1560" cy="975" r="9" fill="#f7b733"/>
+  <text x="1040" y="1035" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="96" fill="#e0567a">say cheese!</text>
+  <text x="1040" y="1105" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="30" letter-spacing="10" fill="#b04a6a">FLIPBOOK STUDIO</text>
+</svg>

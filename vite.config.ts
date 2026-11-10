@@ -16,6 +16,6 @@ export default defineConfig({
   // Pre-bundle deps that are only imported by lazy admin routes. Otherwise Vite finds
   // them on first visit, re-optimizes, and the lazy chunk import fails once.
   optimizeDeps: {
-    include: ['@supabase/supabase-js', 'qrcode', 'fflate'],
+    include: ['@supabase/supabase-js', 'qrcode', 'fflate', 'mediabunny', 'pdf-lib', 'gifenc'],
   },
 })

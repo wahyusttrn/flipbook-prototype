@@ -51,6 +51,9 @@ export function SessionDetail() {
   const link = publicLink(session.slug)
   const raw = photos.filter((p) => p.kind === 'raw')
   const framed = photos.filter((p) => p.kind === 'framed')
+  const photoFrames = templates.filter((t) => t.kind === 'photo')
+  const flipbookDesigns = templates.filter((t) => t.kind === 'flipbook')
+  const replaceTake = (t: Take) => setTakes((all) => all.map((x) => (x.id === t.id ? t : x)))
   const framesOf = (takeId: string) =>
     photos.filter((p) => p.take_id === takeId).sort((a, b) => (a.frame_index ?? 0) - (b.frame_index ?? 0))
   const purged = !!session.purged_at
@@ -179,6 +182,9 @@ export function SessionDetail() {
                 key={`${importing.name}-${importing.lastModified}-${importing.size}`}
                 file={importing}
                 sessionId={session.id}
+                sessionName={session.name}
+                designs={flipbookDesigns}
+                onTakeChange={replaceTake}
                 onDone={(take, frames) => {
                   setTakes((all) => [...all, take])
                   setPhotos((all) => [...all, ...frames])
@@ -200,7 +206,15 @@ export function SessionDetail() {
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {takes.map((t) => (
-                  <TakeCard key={t.id} take={t} frames={framesOf(t.id)} onDelete={() => removeTake(t)} />
+                  <TakeCard
+                    key={t.id}
+                    take={t}
+                    frames={framesOf(t.id)}
+                    designs={flipbookDesigns}
+                    sessionName={session.name}
+                    onChange={replaceTake}
+                    onDelete={() => removeTake(t)}
+                  />
                 ))}
               </div>
             )}
@@ -211,7 +225,7 @@ export function SessionDetail() {
             <Composer
               sessionId={session.id}
               rawPhotos={raw}
-              templates={templates}
+              templates={photoFrames}
               onSaved={(p) => setPhotos((all) => [...all, p])}
             />
           </Card>

@@ -7,6 +7,3 @@ export async function zipFiles(files: { name: string; blob: Blob }[]): Promise<B
   )
   return new Blob([zipSync(Object.fromEntries(entries), { level: 0 })], { type: 'application/zip' })
 }
-
-/** page-001.jpg … so files sort in flipbook order everywhere. */
-export const pageFileName = (i: number) => `page-${String(i + 1).padStart(3, '0')}.jpg`

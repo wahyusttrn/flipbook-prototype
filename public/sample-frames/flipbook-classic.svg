@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+  <!-- Flipbook page design · 3×2 in at 600 DPI · one 16:9 photo hole (transparent).
+       The left 0.5 in (300 px) is the binding margin: it disappears into the staples. -->
+  <defs>
+    <mask id="hole">
+      <rect width="1800" height="1200" fill="white"/>
+      <rect x="340" y="80" width="1400" height="788" rx="18" fill="black"/>
+    </mask>
+  </defs>
+  <g mask="url(#hole)">
+    <rect width="1800" height="1200" fill="#fbf8f2"/>
+    <rect width="300" height="1200" fill="#f1ece2"/>
+    <line x1="300" y1="0" x2="300" y2="1200" stroke="#d9d2c4" stroke-width="3" stroke-dasharray="14 12"/>
+    <rect x="334" y="74" width="1412" height="800" rx="22" fill="none" stroke="#1c1c1c" stroke-width="3"/>
+  </g>
+  <text x="1040" y="1010" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="104" fill="#1c1c1c">flipbook</text>
+  <text x="1040" y="1080" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="32" letter-spacing="12" fill="#1c1c1c" opacity="0.6">SELF PHOTO STUDIO</text>
+</svg>

@@ -21,8 +21,12 @@ export interface Session {
   purged_at: string | null
 }
 
+/** photo = frame for the photo composer; flipbook = page design applied on top of flipbook pages */
+export type TemplateKind = 'photo' | 'flipbook'
+
 export interface Template {
   id: string
+  kind: TemplateKind
   name: string
   width: number
   height: number
@@ -52,7 +56,28 @@ export interface Take {
   session_id: string
   fps: number
   source_name: string
+  /** Flipbook page design (template of kind 'flipbook'); null = plain pages */
+  design_template_id: string | null
+  cover: FlipbookCover | null
+  /** Rendered MP4 in storage; null until the studio PC has made it */
+  video_key: string | null
   created_at: string
+}
+
+/** Optional first page with the customer's name and date */
+export interface FlipbookCover {
+  enabled: boolean
+  title: string
+  subtitle: string
+}
+
+/** What the gallery needs to show and design a take */
+export interface PublicTake {
+  id: string
+  fps: number
+  cover: FlipbookCover | null
+  design: Pick<Template, 'id' | 'width' | 'height' | 'slots'> | null
+  has_video: boolean
 }
 
 /** What the public gallery endpoint returns. */
@@ -62,7 +87,7 @@ export type PublicSession =
       name: string
       expires_at: string
       photos: Pick<Photo, 'id' | 'kind' | 'width' | 'height' | 'take_id' | 'frame_index'>[]
-      takes: Pick<Take, 'id' | 'fps'>[]
+      takes: PublicTake[]
     }
   | { status: 'expired'; name: string; expires_at: string }
 
@@ -79,6 +104,12 @@ export const FRAME_MAX_EDGE = 1920
 export const DEFAULT_FLIPBOOK_FPS = 12
 /** Safety cap per take (20 s at 12 fps), so a long video isn't turned into thousands of uploads. */
 export const MAX_TAKE_FRAMES = 240
+/** Printed flipbook page: 3×2 in, landscape, bound on the left with a 0.5 in margin (300 DPI → 900×600 px). */
+export const FLIPBOOK_PAGE = { widthIn: 3, heightIn: 2, bindingIn: 0.5, dpi: 300 } as const
+/** How long the cover is shown at the start of the flipbook video */
+export const COVER_SECONDS = 1
+/** Hold the last page a moment (video and GIF) so the loop has a beat before restarting */
+export const END_HOLD_SECONDS = 0.5
 /** Max size per uploaded file. Vercel functions reject request bodies over 4.5 MB (full + thumb together). */
 export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
@@ -92,6 +123,7 @@ export const storageKeys = {
     `sessions/${sessionId}/${kind}/${photoId}_thumb.jpg`,
   sessionFolder: (sessionId: string, kind: PhotoKind) => `sessions/${sessionId}/${kind}`,
   template: (templateId: string) => `templates/${templateId}.png`,
+  takeVideo: (sessionId: string, takeId: string) => `sessions/${sessionId}/frame/${takeId}.mp4`,
 }
 
 export function isExpired(s: Pick<Session, 'expires_at' | 'purged_at'>, now = Date.now()) {

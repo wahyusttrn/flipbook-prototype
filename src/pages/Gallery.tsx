@@ -5,8 +5,8 @@ import { Spinner } from '../components/ui'
 import { ApiError, publicApi } from '../lib/publicApi'
 import { downloadBlob } from '../lib/download'
 import { daysLeft, formatDate } from '../lib/format'
-import type { PublicSession } from '../lib/shared'
-import { pageFileName, zipFiles } from '../lib/zip'
+import type { PublicSession, PublicTake } from '../lib/shared'
+import { zipFiles } from '../lib/zip'
 
 type GalleryPhoto = Extract<PublicSession, { status: 'ok' }>['photos'][number]
 
@@ -89,11 +89,11 @@ export function Gallery() {
       {takes.length > 0 && (
         <section className="px-4 pb-10">
           <h2 className="mx-auto mb-3 max-w-3xl text-sm font-medium text-stone-500">
-            Your flipbook{takes.length > 1 ? 's' : ''} · tap to pause, slide to flip
+            Your flipbook{takes.length > 1 ? 's' : ''}
           </h2>
           <div className={`mx-auto grid max-w-3xl gap-6 ${takes.length > 1 ? 'sm:grid-cols-2' : ''}`}>
             {takes.map((t) => (
-              <GalleryTake key={t.id} pages={t.pages} fps={t.fps} name={data.name} single={takes.length === 1} />
+              <GalleryTake key={t.id} take={t} pages={t.pages} name={data.name} single={takes.length === 1} />
             ))}
           </div>
         </section>
@@ -159,54 +159,135 @@ function Message({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+/** Customer GIF width: built from the 480 px thumbnails, so a designed page (photo ≈ 78% of it) at 600 px is sharp enough */
+const GIF_WIDTH = { designed: 600, plain: 480 }
+
+type SaveKind = 'video' | 'gif'
+type SaveState =
+  | { step: 'idle' }
+  | { step: 'busy'; kind: SaveKind; done?: number; total?: number }
+  | { step: 'ready'; kind: SaveKind; file: File }
+  | { step: 'error'; kind: SaveKind }
+
 function GalleryTake({
+  take,
   pages,
-  fps,
   name,
   single,
 }: {
+  take: PublicTake
   pages: GalleryPhoto[]
-  fps: number
   name: string
   single: boolean
 }) {
-  const [state, setState] = useState<'idle' | 'busy' | 'error'>('idle')
+  const [state, setState] = useState<SaveState>({ step: 'idle' })
+  const base = `${(name || 'flipbook').replace(/[^\w-]+/g, '-').slice(0, 30)}-flipbook`
 
-  async function download() {
-    setState('busy')
+  // Phones: prepare the file, then a second tap opens the share sheet (share needs a fresh tap).
+  // Computers: a normal download.
+  async function saveVideo() {
+    if (!canShareFiles) {
+      window.location.href = publicApi.takeVideoUrl(take.id, true)
+      return
+    }
+    setState({ step: 'busy', kind: 'video' })
     try {
-      const blobs = await Promise.all(
-        pages.map(async (p) => {
-          const res = await fetch(publicApi.photoUrl(p.id, 'full'))
-          if (!res.ok) throw new Error('Download failed')
+      const res = await fetch(publicApi.takeVideoUrl(take.id))
+      if (!res.ok) throw new Error()
+      setState({ step: 'ready', kind: 'video', file: new File([await res.blob()], `${base}.mp4`, { type: 'video/mp4' }) })
+    } catch {
+      setState({ step: 'error', kind: 'video' })
+    }
+  }
+
+  // Built on this phone from the page thumbnails, with the same design + cover as the video.
+  async function saveGif() {
+    setState({ step: 'busy', kind: 'gif', done: 0, total: pages.length })
+    try {
+      const [{ makeFlipbookGif }, { loadDesign }, { decode }, { prefetch }] = await Promise.all([
+        import('../lib/flipbookGif'),
+        import('../lib/flipbook'),
+        import('../lib/image'),
+        import('../lib/prefetch'),
+      ])
+      const thumbs = prefetch(
+        pages.map((p) => async () => {
+          const res = await fetch(publicApi.photoUrl(p.id, 'thumb'))
+          if (!res.ok) throw new Error(`Page download failed (${res.status})`)
           return res.blob()
         }),
       )
-      const zip = await zipFiles(blobs.map((blob, i) => ({ name: pageFileName(i), blob })))
-      downloadBlob(zip, `${(name || 'flipbook').replace(/[^\w-]+/g, '-').slice(0, 30)}-flipbook.zip`)
-      setState('idle')
+      const blob = await makeFlipbookGif({
+        count: pages.length,
+        getPage: async (i) => decode(await thumbs[i]),
+        design: await loadDesign(take.design),
+        cover: take.cover,
+        fps: take.fps,
+        width: take.design ? GIF_WIDTH.designed : GIF_WIDTH.plain,
+        onProgress: (done, total) => setState({ step: 'busy', kind: 'gif', done, total }),
+      })
+      const file = new File([blob], `${base}.gif`, { type: 'image/gif' })
+      if (canShareFiles) setState({ step: 'ready', kind: 'gif', file })
+      else {
+        downloadBlob(file, file.name)
+        setState({ step: 'idle' })
+      }
     } catch {
-      setState('error')
+      setState({ step: 'error', kind: 'gif' })
     }
+  }
+
+  async function share(file: File) {
+    try {
+      await navigator.share({ files: [file] })
+    } catch {
+      /* cancelled */
+    }
+    setState({ step: 'idle' })
+  }
+
+  const btn = 'rounded-full bg-white px-4 py-2 font-medium shadow ring-1 ring-black/5 disabled:opacity-60'
+  const label = (kind: SaveKind, text: string) => {
+    if (state.step === 'busy' && state.kind === kind) {
+      return state.total ? `Making GIF ${state.done}/${state.total}…` : 'Preparing…'
+    }
+    if (state.step === 'error' && state.kind === kind) return 'Failed. Try again'
+    return text
   }
 
   return (
     <div className={single ? 'mx-auto w-full max-w-lg' : ''}>
-      <FlipbookPlayer
-        frames={pages.map((p) => publicApi.photoUrl(p.id, 'thumb'))}
-        fps={fps}
-        className="[&_button]:shadow-lg [&_button]:ring-1 [&_button]:ring-black/5"
-      />
-      <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+      {take.has_video ? (
+        <video
+          src={publicApi.takeVideoUrl(take.id)}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="block w-full rounded-lg bg-stone-200 shadow-lg ring-1 ring-black/5"
+        />
+      ) : (
+        // Video not made yet: plain animated preview of the pages
+        <FlipbookPlayer frames={pages.map((p) => publicApi.photoUrl(p.id, 'thumb'))} fps={take.fps} />
+      )}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="text-stone-500">{pages.length} pages</span>
-        <button
-          type="button"
-          onClick={download}
-          disabled={state === 'busy'}
-          className="rounded-full bg-white px-4 py-2 font-medium shadow ring-1 ring-black/5 disabled:opacity-60"
-        >
-          {state === 'busy' ? 'Preparing…' : state === 'error' ? 'Failed. Try again' : 'Download pages (.zip)'}
-        </button>
+        {state.step === 'ready' ? (
+          <button type="button" onClick={() => share(state.file)} className={`${btn} bg-emerald-700 text-white`}>
+            Tap to save {state.kind === 'video' ? 'video' : 'GIF'}
+          </button>
+        ) : (
+          <div className="flex gap-2">
+            {take.has_video && (
+              <button type="button" onClick={saveVideo} disabled={state.step === 'busy'} className={btn}>
+                {label('video', 'Save video')}
+              </button>
+            )}
+            <button type="button" onClick={saveGif} disabled={state.step === 'busy'} className={btn}>
+              {label('gif', 'Save GIF')}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -1,6 +1,6 @@
 import { ApiError } from './publicApi'
 import { supabase } from './supabase'
-import type { Photo, PhotoKind, PhotoVariant, Slot, Take, Template } from './shared'
+import type { FlipbookCover, Photo, PhotoKind, PhotoVariant, Slot, Take, Template, TemplateKind } from './shared'
 
 export { ApiError, publicApi } from './publicApi'
 
@@ -54,11 +54,25 @@ export const adminApi = {
       body: JSON.stringify({ fps, source_name: sourceName }),
     }),
   deleteTake: (id: string) => request<{ ok: true }>(`/api/admin/takes/${id}`, { method: 'DELETE' }),
+  /** Change design/cover. Removes the old video; render + upload a new one afterwards. */
+  updateTake: (id: string, patch: { design_template_id?: string | null; cover?: FlipbookCover | null }) =>
+    request<Take>(`/api/admin/takes/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  uploadTakeVideo(id: string, video: Blob) {
+    const form = new FormData()
+    form.set('video', video, 'flipbook.mp4')
+    return request<Take>(`/api/admin/takes/${id}/video`, { method: 'POST', body: form })
+  },
+  takeVideoBlob: (id: string) => request<Blob>(`/api/admin/takes/${id}/video`),
   deletePhoto: (id: string) => request<{ ok: true }>(`/api/admin/photos/${id}`, { method: 'DELETE' }),
   deleteSession: (id: string) => request<{ ok: true }>(`/api/admin/sessions/${id}`, { method: 'DELETE' }),
-  createTemplate(input: { name: string; overlay: Blob; width: number; height: number; slots: Slot[] }) {
+  createTemplate(input: { name: string; kind: TemplateKind; overlay: Blob; width: number; height: number; slots: Slot[] }) {
     const form = new FormData()
     form.set('name', input.name)
+    form.set('kind', input.kind)
     form.set('overlay', input.overlay, 'overlay.png')
     form.set('width', String(input.width))
     form.set('height', String(input.height))

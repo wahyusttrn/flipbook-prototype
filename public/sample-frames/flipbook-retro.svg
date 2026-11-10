@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+  <!-- Flipbook page design · 3×2 in at 600 DPI · one 16:9 photo hole (transparent).
+       The left 0.5 in (300 px) is the binding margin: it disappears into the staples. -->
+  <defs>
+    <mask id="hole">
+      <rect width="1800" height="1200" fill="white"/>
+      <rect x="430" y="120" width="1248" height="702" rx="40" fill="black"/>
+    </mask>
+  </defs>
+  <g mask="url(#hole)">
+    <rect width="1800" height="1200" fill="#f6ead3"/>
+    <rect width="300" height="1200" fill="#efdfc2"/>
+    <!-- 70s stripes running around the photo -->
+    <rect x="400" y="90" width="1308" height="762" rx="70" fill="none" stroke="#e8743b" stroke-width="22"/>
+    <rect x="368" y="58" width="1372" height="826" rx="102" fill="none" stroke="#f2b33d" stroke-width="22"/>
+    <rect x="336" y="26" width="1436" height="890" rx="134" fill="none" stroke="#8b4a2b" stroke-width="22"/>
+  </g>
+  <text x="1054" y="1062" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-weight="bold" font-size="104" fill="#8b4a2b">good times</text>
+  <text x="1054" y="1134" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="28" letter-spacing="12" fill="#e8743b">FLIPBOOK · SELF PHOTO STUDIO</text>
+</svg>

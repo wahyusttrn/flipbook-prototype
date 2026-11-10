@@ -16,9 +16,9 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-type Drawable = ImageBitmap | HTMLImageElement | HTMLCanvasElement
+export type Drawable = ImageBitmap | HTMLImageElement | HTMLCanvasElement
 
-function sizeOf(img: Drawable) {
+export function sizeOf(img: Drawable) {
   return img instanceof HTMLImageElement
     ? { w: img.naturalWidth, h: img.naturalHeight }
     : { w: img.width, h: img.height }

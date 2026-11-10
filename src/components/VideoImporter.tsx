@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { adminApi } from '../lib/api'
-import { DEFAULT_FLIPBOOK_FPS, FRAME_MAX_EDGE, MAX_TAKE_FRAMES, type Photo, type Take } from '../lib/shared'
+import { defaultCover, loadDesign } from '../lib/flipbook'
+import { decode } from '../lib/image'
+import { DEFAULT_FLIPBOOK_FPS, FRAME_MAX_EDGE, MAX_TAKE_FRAMES, type Photo, type Take, type Template } from '../lib/shared'
 import { detectFps, disposeVideo, extractFrames, loadVideo, planFrames, type ExtractedFrame } from '../lib/video'
 import { FlipbookPlayer } from './FlipbookPlayer'
 import { Button, ErrorText, Spinner } from './ui'
 
 type Mode = 'auto' | 'pick'
-type Phase = 'loading' | 'ready' | 'extracting' | 'review' | 'uploading'
+type Phase = 'loading' | 'ready' | 'extracting' | 'review' | 'uploading' | 'video'
 
 const RATE_OPTIONS = [8, 10, 12, 15, 24]
 const UPLOAD_CONCURRENCY = 4
 const PREF_RATE = 'flipbook:rate'
 const PREF_MODE = 'flipbook:mode'
+const PREF_DESIGN = 'flipbook:design'
+const PREF_COVER = 'flipbook:cover'
 
 function readPref(key: string) {
   try {
@@ -38,12 +42,20 @@ const secs = (n: number) => `${n.toFixed(1)} s`
 export function VideoImporter({
   file,
   sessionId,
+  sessionName,
+  designs,
   onDone,
+  onTakeChange,
   onClose,
 }: {
   file: File
   sessionId: string
+  sessionName: string
+  /** Flipbook page designs to choose from */
+  designs: Template[]
   onDone: (take: Take, frames: Photo[]) => void
+  /** The take got its design/cover or its video */
+  onTakeChange: (take: Take) => void
   onClose: () => void
 }) {
   /** Object URL of the file, for the visible preview (set once the video has loaded) */
@@ -58,6 +70,12 @@ export function VideoImporter({
   const [sourceFps, setSourceFps] = useState<number | null>(null)
   const [targetFps, setTargetFps] = useState(() => Number(readPref(PREF_RATE)) || DEFAULT_FLIPBOOK_FPS)
   const [mode, setMode] = useState<Mode>(() => (readPref(PREF_MODE) === 'pick' ? 'pick' : 'auto'))
+  const [designId, setDesignId] = useState<string | null>(() => {
+    const saved = readPref(PREF_DESIGN)
+    return designs.some((d) => d.id === saved) ? saved : null
+  })
+  const [withCover, setWithCover] = useState(() => readPref(PREF_COVER) !== 'off')
+  const [note, setNote] = useState<string | null>(null)
   const [start, setStart] = useState(0)
   const [end, setEnd] = useState(0)
   const [frames, setFrames] = useState<ExtractedFrame[]>([])
@@ -182,8 +200,29 @@ export function VideoImporter({
       if (errors.length) {
         setFailed(errors)
         setPhase('review')
-      } else {
+        return
+      }
+      // Design + cover, then the customer video, made from the frames we already have in memory.
+      const cover = { ...defaultCover(sessionName), enabled: withCover }
+      const designed = await adminApi.updateTake(take.id, { design_template_id: designId, cover })
+      onTakeChange(designed)
+      try {
+        setPhase('video')
+        setProgress({ done: 0, total: list.length })
+        const { makeFlipbookVideo } = await import('../lib/flipbookVideo')
+        const video = await makeFlipbookVideo({
+          count: list.length,
+          getPage: (i) => decode(list[i].full),
+          design: await loadDesign(designs.find((d) => d.id === designId) ?? null),
+          cover,
+          fps: designed.fps,
+          onProgress: (done, total) => setProgress({ done, total }),
+        })
+        onTakeChange(await adminApi.uploadTakeVideo(take.id, video))
         onClose()
+      } catch (e) {
+        setNote(`Pages are saved, but the video couldn't be made: ${e instanceof Error ? e.message : e}. Use "Make video" on the take.`)
+        setPhase('review')
       }
     } catch (e) {
       setError(e)
@@ -197,7 +236,7 @@ export function VideoImporter({
     else setEnd(Math.max(t, start))
   }
 
-  const busy = phase === 'extracting' || phase === 'uploading' || phase === 'loading'
+  const busy = phase === 'extracting' || phase === 'uploading' || phase === 'video' || phase === 'loading'
   const chosen = frames.filter((_, i) => selected[i])
 
   return (
@@ -214,7 +253,7 @@ export function VideoImporter({
             Stop
           </Button>
         ) : (
-          <Button variant="ghost" onClick={onClose} disabled={phase === 'uploading'}>
+          <Button variant="ghost" onClick={onClose} disabled={phase === 'uploading' || phase === 'video'}>
             Close
           </Button>
         )}
@@ -272,6 +311,38 @@ export function VideoImporter({
                   {pageCount === 0 && ' · nothing selected, so check start/end'}
                 </p>
 
+                <label className="flex items-center gap-3">
+                  <span className="w-28 text-stone-600">Page design</span>
+                  <select
+                    value={designId ?? ''}
+                    onChange={(e) => {
+                      setDesignId(e.target.value || null)
+                      writePref(PREF_DESIGN, e.target.value)
+                    }}
+                    disabled={busy}
+                    className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-2 py-1.5"
+                  >
+                    <option value="">Plain pages</option>
+                    {designs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={withCover}
+                    onChange={(e) => {
+                      setWithCover(e.target.checked)
+                      writePref(PREF_COVER, e.target.checked ? 'on' : 'off')
+                    }}
+                    disabled={busy}
+                  />
+                  Cover page with the session name and date (editable later)
+                </label>
+
                 <fieldset className="space-y-1.5">
                   <legend className="mb-1 text-stone-600">After extracting</legend>
                   <label className="flex items-center gap-2">
@@ -290,11 +361,12 @@ export function VideoImporter({
                   </Button>
                 )}
 
-                {(phase === 'extracting' || phase === 'uploading') && (
+                {(phase === 'extracting' || phase === 'uploading' || phase === 'video') && (
                   <div className="space-y-1.5">
                     <p className="flex items-center gap-2 text-stone-600">
                       <Spinner className="size-4" />
-                      {phase === 'extracting' ? 'Extracting' : 'Uploading'} {progress.done}/{progress.total}…
+                      {phase === 'extracting' ? 'Extracting' : phase === 'uploading' ? 'Uploading' : 'Making video'} {progress.done}/
+                      {progress.total}…
                     </p>
                     <div className="h-1.5 overflow-hidden rounded-full bg-stone-200">
                       <div
@@ -310,6 +382,8 @@ export function VideoImporter({
         </div>
       ) : null}
 
+      {note && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{note}</p>}
+
       {failed.length > 0 && (
         <ul className="space-y-1 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
           <li className="font-medium">Some pages failed to upload. The take was saved without them.</li>
@@ -319,7 +393,7 @@ export function VideoImporter({
         </ul>
       )}
 
-      {phase === 'review' && frames.length > 0 && failed.length === 0 && (
+      {phase === 'review' && frames.length > 0 && failed.length === 0 && !note && (
         <div className="space-y-3 border-t border-stone-200 pt-4">
           <div className="flex flex-wrap items-center gap-2">
             <p className="mr-auto text-sm text-stone-600">

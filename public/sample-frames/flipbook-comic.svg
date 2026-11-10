@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+  <!-- Flipbook page design · 3×2 in at 600 DPI · one 16:9 photo hole (transparent).
+       The left 0.5 in (300 px) is the binding margin. Halftone dots and the burst are opaque. -->
+  <defs>
+    <mask id="hole">
+      <rect width="1800" height="1200" fill="white"/>
+      <rect x="370" y="70" width="1360" height="765" fill="black"/>
+    </mask>
+    <pattern id="dots" width="36" height="36" patternUnits="userSpaceOnUse">
+      <circle cx="9" cy="9" r="7" fill="#f6a91d"/>
+      <circle cx="27" cy="27" r="7" fill="#f6a91d"/>
+    </pattern>
+  </defs>
+  <g mask="url(#hole)">
+    <rect width="1800" height="1200" fill="#ffd93b"/>
+    <rect x="300" width="1500" height="1200" fill="url(#dots)"/>
+    <rect width="300" height="1200" fill="#ffe57a"/>
+    <!-- drop shadow, then a thick ink border round the photo -->
+    <rect x="410" y="110" width="1360" height="765" fill="#111"/>
+    <rect x="362" y="62" width="1376" height="781" fill="none" stroke="#111" stroke-width="16"/>
+  </g>
+  <text x="372" y="990" font-family="'Arial Black', Impact, Helvetica, sans-serif" font-weight="900" font-size="78" fill="#111">SCENE 1 · TAKE 1</text>
+  <text x="376" y="1060" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="30" letter-spacing="10" fill="#111">FLIPBOOK · SELF PHOTO STUDIO</text>
+  <g transform="translate(1575 1012) rotate(-8) scale(0.9)">
+    <polygon points="0,-165 26,-115 72,-149 74,-92 129,-103 106,-51 161,-37 118,0 161,37 106,51 129,103 74,92 72,149 26,115 0,165 -26,115 -72,149 -74,92 -129,103 -106,51 -161,37 -118,0 -161,-37 -106,-51 -129,-103 -74,-92 -72,-149 -26,-115"
+      fill="#ff4b3e" stroke="#111" stroke-width="10" stroke-linejoin="round"/>
+    <text y="18" text-anchor="middle" font-family="'Arial Black', Impact, Helvetica, sans-serif" font-weight="900" font-size="52" fill="#fff" stroke="#111" stroke-width="3">ACTION!</text>
+  </g>
+</svg>

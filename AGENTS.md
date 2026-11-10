@@ -33,6 +33,12 @@ Vercel Function; Cloudflare is no longer used anywhere.
 Storage decision (2026-11-08): the user chose **Supabase Storage over Cloudflare R2** to avoid extra setup for the
 prototype, accepting the 1 GB / ~5 GB egress limits. R2 is the planned upgrade path if limits bite (see §11).
 
+Flipbook output decisions (2026-11-10): **customers get an MP4** (best for phones/sharing; GIF is 5–10× bigger and
+banded), rendered **once on the studio PC** and stored with the take (works on any phone, small egress); **the studio gets
+a print-ready PDF**; zip downloads were removed. **GIF export added on request (2026-11-10)**: staff "Download GIF" and customer
+"Save GIF", both generated in the browser on demand and **never stored** (GIF is 2–10 MB and 256-colour, so the MP4 stays the
+main "Save video" output; GIF is for places that need an auto-looping image). Page = **3×2 in landscape, 0.5 in binding margin on the left**. Designs
+are **non-destructive** (overlay + optional cover drawn on top; stored pages never change).
 Flipbook decisions (2026-11-10): default **12 pages per second** (user's client asked for ~11; 12 lands exactly on 24/60 fps
 frames). Staff choose per import between **auto** (upload all) and **pick** (review grid). PNG photos are accepted and
 stored as JPEG like everything else (user: keep that).
@@ -45,7 +51,8 @@ stored as JPEG like everything else (user: keep that).
 | --- | --- | --- |
 | Frontend | Vite 8, React 19 + **React Compiler**, TypeScript 7 (`tsc -b`), Tailwind v4, react-router v8 | SPA |
 | API | **Vercel Function** `api/index.ts` → host-agnostic `server/app.ts` (Web `Request`→`Response`) | In dev, a Vite middleware runs the same handler |
-| Storage | **Supabase Storage**, private bucket `photos` | Accessed only by the API with the service-role key |
+| Storage | **Supabase Storage**, private bucket `photos` (JPEG, PNG, MP4) | Accessed only by the API with the service-role key |
+| Media | **mediabunny** (MP4 via WebCodecs `VideoEncoder`), **pdf-lib** (print PDF), **gifenc** (GIF, no types: `src/lib/gifenc.d.ts`) | Lazy-loaded chunks; gifenc also loads in the gallery |
 | DB + auth | **Supabase** (Postgres + email/password auth) | `supabase/schema.sql` |
 | Lint | oxlint | `.oxlintrc.json` |
 | Hosting | **Vercel** (`vercel.json`) | SPA from `dist/`, `/api/*` rewrite to the function, daily cron |
@@ -90,13 +97,23 @@ Key design decisions (and why):
 - **Public gallery never talks to Supabase directly**; it goes through the API, which enforces expiry.
 - **Lazy-only deps must be pre-bundled**: anything imported only from lazy admin routes goes in `optimizeDeps.include`
   (`vite.config.ts`). Otherwise Vite discovers it on first visit, re-optimizes, and the chunk import fails
-  ("Failed to fetch dynamically imported module"). Currently: `@supabase/supabase-js`, `qrcode`, `fflate`.
+  ("Failed to fetch dynamically imported module"). Currently: `@supabase/supabase-js`, `qrcode`, `fflate`, `mediabunny`,
+  `pdf-lib`, `gifenc`.
 - **Video never leaves the browser** (`src/lib/video.ts`): a `<video>` element decodes the take, `detectFps()` measures the
   real frame rate from `requestVideoFrameCallback` timestamps (½ s of muted playback, smallest gap, snapped to the
   *closest* standard rate, since 24 vs 23.976 is only 0.1%), `planFrames()` picks every Nth source frame whose rate is
   closest to the target and aims at the **middle** of each frame `(f + 0.5) / fps` so seeks never land on a neighbour;
   without a detected fps it samples by time (`start + k/target + 1ms`). Frames are drawn to canvas → JPEG (≤1920px, q0.85)
   + 480px thumb, then uploaded as photos with `kind: 'frame'`. Verified with frame-numbered ffmpeg videos (§10).
+- **Flipbook outputs are made on the studio PC**: `makeFlipbookVideo` (H.264 MP4, long edge ≤1280, QUALITY_MEDIUM, retried at
+  LOW if over 4 MB; timeline = 1 s cover + one page per 1/fps + ½ s hold on the last page) is uploaded to the take and
+  served to customers; `makeFlipbookPdf` is generated on demand for staff and never stored. Both import their libraries
+  with `await import(...)` so the session page chunk stays ~65 KB.
+- **GIFs are made where they're downloaded** (`makeFlipbookGif`, gifenc): staff from full pages at 720 px, customers on their
+  phone from the 480 px thumbs at 600 px (480 without a design). Same timing as the MP4 (cover 1 s, ½ s end hold, delays
+  rounded on a running clock in 1/100 s), one 256-colour palette per page picked from ¼ of the pixels (halves the time, same look).
+- **Pages are downloaded ahead** (`prefetch()`, 6 at a time) for every video/PDF/GIF job. Fetching one by one (~0.4 s each
+  through the API) made a 48-page GIF take 25–40 s; with read-ahead it's ~4–7 s.
 - **Gallery bundle is kept small**: admin routes are lazy-loaded and `src/lib/publicApi.ts` has no Supabase import.
   Don't import `supabase.ts` / `api.ts` from `pages/Gallery.tsx` or anything it imports.
 
@@ -125,7 +142,16 @@ src/lib/publicApi.ts       ApiError + public endpoints (NO supabase import)
 src/lib/api.ts             Authed request() + adminApi (uploads, deletes, photoBlob cache); re-exports publicApi
 src/lib/image.ts           decode, loadImage, resizeToJpeg, prepareUpload, drawCover, composeFrame, detectSlots, toBlob
 src/lib/video.ts           loadVideo, detectFps, planFrames, extractFrames, disposeVideo, VideoReadError (browser-only)
-src/lib/zip.ts             zipFiles([{name, blob}]) via fflate (level 0), pageFileName(i) → page-001.jpg
+src/lib/zip.ts             zipFiles([{name, blob}]) via fflate (level 0), used by the gallery's desktop "Download all"
+src/lib/flipbook.ts        Page rendering shared by preview/MP4/PDF: loadDesign (cached overlay), renderPage, renderCover
+                           (title/subtitle over a gradient in the photo hole), renderPrintPage (900×600 = 3×2 in @300 DPI;
+                           without a design: built-in white page, binding margin + staple guide), defaultCover
+src/lib/flipbookVideo.ts   makeFlipbookVideo → MP4 Blob (mediabunny CanvasSource, codec avc)
+src/lib/flipbookGif.ts     makeFlipbookGif → GIF Blob (gifenc; used by TakeCard AND the gallery, so no Supabase import)
+src/lib/gifenc.d.ts        Types for the parts of gifenc we use
+src/lib/prefetch.ts        prefetch(tasks, limit=6): start downloads in order, N at a time, one promise per task
+src/lib/flipbookPdf.ts     makeFlipbookPdf → PDF Blob (A4 2×5 / Letter 2×4 cells of 3×2 in, grey cut lines, crop marks,
+                           vertical page numbers in the binding margin, header + instructions footer, Latin-1 text only)
 src/lib/download.ts        downloadBlob(blob, filename)
 src/lib/format.ts          DAY_MS, formatDate, formatDateTime, daysLeft, publicLink
 src/lib/slug.ts            randomSlug(): 10 chars, no look-alike characters
@@ -135,10 +161,14 @@ src/components/useAuth.ts  Supabase session hook (undefined = loading, null = lo
 src/components/RequireAuth.tsx, SetupNotice.tsx, AdminLayout.tsx
 src/components/AdminImage.tsx   <img> for admin-only photos (fetched as blob with auth header)
 src/components/Uploader.tsx     Drag/drop + picker: images → resize + upload (concurrency 2); a video → onVideo(file)
-src/components/VideoImporter.tsx  Video → pages: preview, fps detection, pages/s select, trim, auto/pick mode (localStorage
-                                `flipbook:rate`, `flipbook:mode`), extract, review grid, createTake + upload (concurrency 4)
+src/components/VideoImporter.tsx  Video → pages: preview, fps detection, pages/s select, trim, page design + cover
+                                (`flipbook:design`, `flipbook:cover`), auto/pick mode (`flipbook:rate`, `flipbook:mode`),
+                                extract, review grid, createTake + upload (concurrency 4), then updateTake + MP4 from the
+                                in-memory frames + uploadTakeVideo
 src/components/FlipbookPlayer.tsx Animated page player (preloads, tap = play/pause, slider = flip). No Supabase import (gallery uses it)
-src/components/TakeCard.tsx     Admin take: player, "Download pages" zip, delete
+src/components/TakeCard.tsx     Admin take: designed preview (from thumbs), design select, cover toggle/title/subtitle,
+                                "Save design & remake video", Make/Download video, Download GIF, Print PDF (A4/Letter,
+                                `flipbook:paper`), delete. `pageLoader()` prefetches full pages per job
 src/components/Composer.tsx     Frame picker, slot assignment, live preview, full-res render + upload
 src/components/RouteError.tsx  App error page; auto-reloads once (sessionStorage flag) when a lazy chunk fails to load
 src/components/QrCode.tsx, SessionStatus.tsx
@@ -148,8 +178,12 @@ src/pages/Login.tsx, Sessions.tsx (list + create), SessionDetail.tsx (link/QR, 1
           Templates.tsx (frames list + new frame with auto slot detection), Gallery.tsx (public), NotFound.tsx
 
 public/sample-frames/      Sample frames (SVG, transparent holes), listed in SAMPLES in Templates.tsx:
-                           classic-strip.svg 600×1800 (4 slots), film-35mm.svg 1200×1800 (3), pastel-party.svg 1200×1800 (6).
-                           All three were also installed into the Supabase project on 2026-11-08.
+                           classic-strip.svg 600×1800 (4 slots), film-35mm.svg 1200×1800 (3), pastel-party.svg 1200×1800 (6);
+                           flipbook designs (kind 'flipbook', 1800×1200, one 16:9 hole, left 300 px = binding margin):
+                           flipbook-classic.svg, flipbook-pastel.svg, flipbook-film.svg (dark, opaque sprockets),
+                           flipbook-retro.svg (smaller 1248×702 hole inside 70s stripes), flipbook-comic.svg (halftone, burst)
+                           The three photo frames were installed into the Supabase project on 2026-11-08, the five
+                           flipbook designs on 2026-11-10 (service key: PNG to templates/{id}.png + templates row).
                            SVG rules: width/height attrs, holes cut with a <mask>, decorations that look like holes
                            (e.g. film sprockets) must be opaque, system fonts only (web fonts don't load in <img> SVGs)
 ```
@@ -160,8 +194,10 @@ public/sample-frames/      Sample frames (SVG, transparent holes), listed in SAM
 
 ```
 sessions  id uuid PK, slug text UNIQUE, name text, created_at, expires_at (default now()+10d), purged_at nullable
-templates id uuid PK, name, width int, height int, overlay_key text, slots jsonb [{x,y,w,h}], created_at
-takes     id uuid PK, session_id → sessions ON DELETE CASCADE, fps numeric (actual pages/s), source_name, created_at
+templates id uuid PK, kind 'photo'|'flipbook', name, width int, height int, overlay_key text, slots jsonb [{x,y,w,h}], created_at
+takes     id uuid PK, session_id → sessions ON DELETE CASCADE, fps numeric (actual pages/s), source_name,
+          design_template_id → templates ON DELETE SET NULL, cover jsonb {enabled,title,subtitle} | null,
+          video_key text | null (rendered MP4), created_at
 photos    id uuid PK, session_id → sessions ON DELETE CASCADE, kind 'raw'|'framed'|'frame', storage_key, thumb_key,
           width, height, template_id → templates ON DELETE SET NULL,
           take_id → takes ON DELETE CASCADE + frame_index (page order, 0-based): only for kind 'frame', created_at
@@ -183,6 +219,7 @@ update types in `src/lib/shared.ts`, and note in both docs that the SQL must be 
 sessions/{sessionId}/{raw|framed|frame}/{photoId}.jpg
 sessions/{sessionId}/{raw|framed|frame}/{photoId}_thumb.jpg
 templates/{templateId}.png
+sessions/{sessionId}/frame/{takeId}.mp4          (rendered flipbook video, overwritten on re-render)
 ```
 Deleting a session = list + remove the `sessions/{id}/raw`, `/framed` and `/frame` folders (`deleteSessionFiles`;
 Supabase `list()` is one level deep, so new kinds need adding there). Bucket limits: 25 MB per file, JPEG/PNG only.
@@ -195,13 +232,17 @@ An older schema had `photos.r2_key`; `schema.sql` renames it to `storage_key` if
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/health` | none | `{ok, error?}`; 503 if env missing |
-| GET | `/api/public/sessions/:slug` | none | `PublicSession`: `{status:'ok', name, expires_at, photos[] (incl. take_id, frame_index), takes[{id,fps}]}` or `{status:'expired', …}`; 404 unknown |
+| GET | `/api/public/sessions/:slug` | none | `PublicSession`: `{status:'ok', name, expires_at, photos[] (incl. take_id, frame_index), takes: PublicTake[] ({id, fps, cover, design: {id,width,height,slots}|null, has_video})}` or `{status:'expired', …}`; 404 unknown |
 | GET | `/api/public/photos/:id/:variant(full\|thumb)[?download=1]` | none | Streams from storage; **410 if expired** |
 | GET | `/api/templates/:id/overlay` | none | Frame PNG (needed same-origin for canvas) |
 | GET | `/api/admin/photos/:id/:variant` | staff | Same as public but ignores expiry |
 | POST | `/api/admin/sessions/:id/photos` | staff | multipart `full`, `thumb` (image/jpeg), `kind`, `width`, `height`, `template_id?`; for `kind=frame` also `take_id` (must belong to the session) + `frame_index` (0…239) → photo row |
 | POST | `/api/admin/sessions/:id/takes` | staff | JSON `{fps (1–60), source_name}` → take row |
-| DELETE | `/api/admin/takes/:id` | staff | All its frame files, then the take (frame rows cascade) |
+| DELETE | `/api/admin/takes/:id` | staff | All its frame files + video, then the take (frame rows cascade) |
+| PATCH | `/api/admin/takes/:id` | staff | JSON `{design_template_id?: uuid|null (must be kind 'flipbook'), cover?: {enabled,title≤80,subtitle≤80}|null}`; **deletes the old video** (`video_key` → null) because it no longer matches |
+| POST | `/api/admin/takes/:id/video` | staff | multipart `video` (video/mp4, ≤4 MB) → upsert at the take's key, sets `video_key` |
+| GET | `/api/admin/takes/:id/video` | staff | The MP4 (ignores expiry) |
+| GET | `/api/public/takes/:id/video[?download=1]` | none | The MP4; **410 if expired**, 404 if not rendered; supports `Range` (206) |
 | DELETE | `/api/admin/photos/:id` | staff | Files + row |
 | DELETE | `/api/admin/sessions/:id` | staff | Session folders + row (photos cascade) |
 | POST | `/api/admin/templates` | staff | multipart `overlay` (image/png), `name`, `width`, `height`, `slots` (JSON, 1–20) |
@@ -220,6 +261,8 @@ Conventions:
   through these, so switching to R2 later only means changing them (via R2's S3 API with keys in env).
 - Cron: `purgeExpired()` is idempotent (Vercel may skip or repeat runs) and handles ≤50 sessions per run whose `expires_at < now - PURGE_GRACE_DAYS`, deletes the session's files and
   photo rows and takes, sets `purged_at`. The session row is kept so the gallery can still say "expired".
+- `serveObject` answers `Range: bytes=…` with 206 + `content-range` (iOS Safari won't play `<video>` otherwise).
+- `createTemplate` takes `kind`; a `flipbook` design must have exactly one slot (400 otherwise).
 - Images are served with `cache-control: private, max-age=3600`. After expiry a cached copy can live up to 1 h on the device. Acceptable.
 
 ---
@@ -238,6 +281,15 @@ copies the preview's current time), and a summary like "every 2nd frame → 12 p
 exclude, animated preview of the selection) → upload chosen. `frame_index` is the position among the *uploaded* pages
 (contiguous 0…n-1). Partial upload failures keep the take with the pages that made it, and list the failures.
 Undecodable files → `VideoReadError` with the H.264 hint. Seeking: ~50 ms/frame, so a 72-page take extracts in ~4 s.
+
+### Flipbook design, video and print (`TakeCard.tsx`, `lib/flipbook*.ts`)
+- Preview: thumbs → `renderPage` / `renderCover` at 480 px, debounced 150 ms, so changes show before saving.
+- **Save design & remake video**: `updateTake` (server drops the old MP4) → fetch full pages → `makeFlipbookVideo` →
+  `uploadTakeVideo`. "Make video" re-renders without changing the design (e.g. after a failed auto-render).
+- **Print PDF**: full pages → `renderPrintPage` (900×600 JPEG q0.9) → 3×2 in cells. 72 pages + cover = 8 A4 sheets, ~4 MB,
+  <1 s. Fonts on the cover use the page's loaded web fonts (Fraunces/Inter; `document.fonts.load` first).
+- **Download GIF**: same pages/design/cover as the video, 720 px, not stored. 48 pages + cover ≈ 2.8 MB in ~5 s.
+- With a design, the video shows the whole printed page (incl. the binding margin), so it looks like the physical page.
 
 ### Frames / templates (`Templates.tsx`)
 Upload PNG/SVG/WebP → rasterised to PNG at natural size → `detectSlots()` finds connected **transparent**
@@ -258,8 +310,11 @@ Never pre-load full images for grids.
 
 ### Public gallery (`Gallery.tsx`)
 States: loading / 404 "Link not found" / error / expired / empty ("photos are on their way") / ok.
-Flipbook takes come first: `FlipbookPlayer` over the pages' **thumbs** at the take's fps + "Download pages (.zip)" (full
-size, `page-001.jpg …`). Frames are **excluded** from the lightbox, "All shots" and "Save all".
+Flipbook takes come first: the stored **MP4** (`<video autoplay loop muted playsinline>`) + **Save video** (phones: fetch, then a
+second tap opens the share sheet; computers: `?download=1`). If no video was rendered yet: `FlipbookPlayer` over the
+plain thumbs, without a save button. **Save GIF** (always shown) builds the GIF on the device from the thumbs + the take's
+design/cover ("Making GIF n/N…"), then the same share-sheet second tap, or a plain download where sharing files isn't
+supported. Mac Chrome also supports file sharing, so it gets the share sheet too. Frames are **excluded** from the lightbox, "All shots" and "Save all".
 Framed first (served **full size**: few and the hero, thumbs look soft on phones), then raw grid (thumbs); lightbox with keyboard + tap zones + download (`?download=1`).
 "Save all": on devices that can share files → fetch all, then a **second tap** opens `navigator.share({files})`
 (share needs a fresh user gesture); otherwise zip with `fflate.zipSync(level 0)` and download.
@@ -345,8 +400,16 @@ VideoReadError. Headless Chrome needs `--autoplay-policy=no-user-gesture-require
 samples: classic-strip → 4 slots ≈ `{33,33,534,378}`…; film-35mm → 3 ≈ `{147,57,906,492}`…;
 pastel-party → 6 ≈ `{57,237,531,456}`… (detected boxes are ~3px larger than the holes on purpose).
 
-End-to-end against the real project (2026-11-08: 46 checks; 2026-11-10 with flipbook: **79 checks** = setup 8, API 15,
-admin+gallery UI 14, flipbook API 16, flipbook UI 17, lifecycle 9). Method, if you repeat it:
+End-to-end against the real project (2026-11-08: 46 checks; 2026-11-10 with flipbook: 79; with design/video/PDF:
+**102 checks** = setup 8, API 15, admin+gallery UI 14, flipbook API 16, design+video API 21, flipbook UI 19, lifecycle 9).
+The design/video API phase creates a 1-hole 900×600 flipbook design PNG and keeps its id in the state file so the UI phase
+can pick it; cleanup deletes it. The UI phase uses CDP `Page.setDownloadBehavior` to capture the PDF/MP4 downloads and
+ffprobes the MP4 (cover + 72 pages = 73 frames, 7.5 s).
+GIF test (2026-11-10, 17 checks + a no-share run, read-only on the owner's session with a temp staff user): gallery Save GIF
+→ "Tap to save GIF" (headless Chrome on macOS supports file sharing) → stub `navigator.share` to capture the File → ffprobe
+(frames = pages + cover, duration = 1 + pages/fps + 0.5, 600×400 with a design); the download path is tested by deleting
+`Navigator.prototype.canShare/share` in `Page.addScriptToEvaluateOnNewDocument`; staff Download GIF → 720×480; Print PDF
+still works with prefetching. Method, if you repeat it:
 - Use a **temporary staff user** created with the service key (`auth.admin.createUser`, `email_confirm: true`) and sign in
   with the publishable key. Never ask for or use the owner's password. **Delete the user and all test rows/files after.**
 - Test scripts and fixtures live in the scratchpad, not the repo. Run Node scripts that need `@supabase/supabase-js` from the
@@ -361,6 +424,9 @@ admin+gallery UI 14, flipbook API 16, flipbook UI 17, lifecycle 9). Method, if y
 - Flipbook UI test: feed videos with CDP `DOM.setFileInputFiles` on the uploader's `input[type=file]` (a realistic
   `testsrc2` 1080p 24p `.mov` for auto mode, the frame-numbered MP4 for pick mode), then decode the bar positions of the
   uploaded pages to prove order (pick mode leaving out pages 1–2 must give source frames 4, 6, 8…142).
+- **Props that seed edit state**: `TakeCard` copies the saved design/cover into local edit state; the importer saves them
+  *after* the card mounts, so the card resets its edits when the saved values change (state-from-previous-render
+  pattern, `syncedKey`). Without it the card showed stale "unsaved changes" and hid the video status.
 - **Object URLs in effects**: create and revoke them in the *same* effect. React's dev double-mount once revoked a URL
   created in `useState` and the importer reported "can't read this video" for a perfectly fine file.
 
@@ -377,7 +443,11 @@ admin+gallery UI 14, flipbook API 16, flipbook UI 17, lifecycle 9). Method, if y
   Don't switch to public bucket URLs without adding CORS handling + `crossOrigin`.
 - `navigator.share` must be called directly from a tap. Hence the two-step "Save all" on phones.
 - HEIC isn't decodable in Chrome; the camera shoots JPEG, so uploads accept JPEG/PNG/WebP only.
-- New lazy-route dependency? Add it to `optimizeDeps.include` (see §3).
+- New lazy-route dependency? Add it to `optimizeDeps.include` (see §3). (`mediabunny`, `pdf-lib` are there.)
+- MP4 encoding needs WebCodecs `VideoEncoder` + H.264 (Chrome/Edge; Safari 17+). Headless Chrome on macOS encodes fine.
+- GIFs are big by nature (60 pages ≈ 5 MB at 600 px, ≈ 6.5–10 MB at 720 px; photo-heavy plain pages are the largest) and
+  gradients band (256 colours). That's why they are never stored or uploaded (Vercel's 4.5 MB limit would also block them).
+- pdf-lib's standard Helvetica is Latin-1 only: `latin1()` strips other characters from titles (emoji etc.).
 - **Vercel function region** defaults to US East. Each API call makes several Supabase round trips, so set the function region
   next to the Supabase region (Vercel → Settings → Functions).
 - `pnpm preview` serves only static files: `/api` doesn't work there. Use `pnpm dev` for anything that needs the API.
@@ -387,10 +457,8 @@ admin+gallery UI 14, flipbook API 16, flipbook UI 17, lifecycle 9). Method, if y
 
 ## 12. Roadmap hints (when the user asks)
 
-- **Flipbook printing** (the client's goal): pages are ordered per take (`frame_index`). Typical layout: a page ~3×2" with a
-  ~0.5–0.75" binding margin on the bound edge, small page numbers for collating, a cover page, several pages per 4R/A4
-  sheet with cut marks, printed in order so page 1 ends up on top. Generate print sheets in the browser (canvas → PDF or
-  print CSS) from the full-size frames.
+- **Flipbook printing** is built (print PDF). Possible next steps: other page sizes (ask the client), duplex/back
+  pages, choosing the cover image (now: first page), customer-chosen designs.
 - **Printing framed photos**: after compositing, print the framed canvas: a print-only page sized to the paper with `@page { size: 4in 6in; margin: 0 }`,
   run the station Chrome with `--kiosk-printing` to skip the dialog. Add the QR code onto the print (the slug exists before compositing).
   Printing must not wait for uploads: compose locally → print → upload in background.

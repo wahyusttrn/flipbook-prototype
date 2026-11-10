@@ -65,6 +65,18 @@ alter table public.photos drop constraint if exists photos_kind_check;
 alter table public.photos add constraint photos_kind_check check (kind in ('raw', 'framed', 'frame'));
 create index if not exists photos_take_idx on public.photos (take_id, frame_index) where take_id is not null;
 
+-- ── Flipbook design + video (2026-11-10) ───────────────────────────────────
+-- templates.kind: 'photo' = frame for the photo composer, 'flipbook' = page design (one photo hole,
+-- incl. the binding margin) applied on top of flipbook pages. Pages are never modified; the design,
+-- cover and rendered MP4 live on the take.
+alter table public.templates add column if not exists kind text not null default 'photo';
+alter table public.templates drop constraint if exists templates_kind_check;
+alter table public.templates add constraint templates_kind_check check (kind in ('photo', 'flipbook'));
+
+alter table public.takes add column if not exists design_template_id uuid references public.templates(id) on delete set null;
+alter table public.takes add column if not exists cover jsonb;        -- {enabled, title, subtitle}
+alter table public.takes add column if not exists video_key text;     -- rendered MP4 in storage, null = not rendered
+
 -- ── Row Level Security ────────────────────────────────────────────────────
 -- Admin UI (logged-in user) reads/writes directly. The public gallery never
 -- touches these tables; it goes through the API, which checks expiry.
@@ -91,5 +103,7 @@ create policy "staff read takes"    on public.takes     for select to authentica
 -- Private bucket for photos + frame overlays. No storage policies on purpose:
 -- only the API (service role) reads/writes it, so expiry is always enforced.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('photos', 'photos', false, 26214400, array['image/jpeg', 'image/png'])
+values ('photos', 'photos', false, 26214400, array['image/jpeg', 'image/png', 'video/mp4'])
 on conflict (id) do nothing;
+-- (existing installs: allow the rendered flipbook videos)
+update storage.buckets set allowed_mime_types = array['image/jpeg', 'image/png', 'video/mp4'] where id = 'photos';

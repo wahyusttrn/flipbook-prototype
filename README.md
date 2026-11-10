@@ -1,8 +1,9 @@
 # Flipbook: self-photo studio prototype
 
 Staff create a session, upload the camera photos and/or a **video take**, which is turned into **flipbook pages** in
-the browser (the video is never uploaded). They can also put photos into a frame. The customer scans a QR code to watch
-their flipbook, see the photos and download everything. Links expire after 10 days.
+the browser (the video is never uploaded), pick a **page design + cover**, and print the flipbook from a ready-made
+**PDF**. They can also put photos into a frame. The customer scans a QR code to watch their flipbook, **save it as a
+video or GIF**, and download the photos. Links expire after 10 days.
 
 ```
 Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → server/app.ts)
@@ -15,7 +16,8 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
 - **API** (`server/app.ts`, served by `api/index.ts` on Vercel): the only thing that touches the private storage bucket.
   Serves photos only while a session is valid, handles uploads, and a daily Vercel Cron deletes expired sessions' files.
 - **Supabase**: admin login, tables and photo storage (private bucket `photos`), all from `supabase/schema.sql`.
-- Image resizing, video frame extraction and frame compositing happen **in the browser**, so no server media processing is needed.
+- Image resizing, video frame extraction, compositing, MP4/GIF encoding and PDF layout all happen **in the browser**, so no
+  server media processing is needed.
 
 > Working on this with an AI agent? See [`AGENTS.md`](AGENTS.md) for the full architecture and conventions.
 
@@ -65,16 +67,26 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
    (e.g. 1200×1800 for 4R, 600×1800 for a 2×6 strip). Holes are detected automatically; fine-tune numbers if needed.
    Three ready-made frames are included as one-click samples (`public/sample-frames/`): **Classic strip** (2×6, 4 photos),
    **Film 35mm** (4R, 3 photos) and **Pastel party** (4R, 6 photos).
+   **Flipbook page designs** live on the same page (type "Flipbook page design"): 3:2, e.g. 1800×1200 (3×2 in at
+   600 DPI), exactly **one** transparent 16:9 hole, left 0.5 in kept free for the staples. Samples: **Flipbook classic**,
+   **pastel**, **film** (dark film strip), **retro** (70s stripes) and **comic** (halftone + burst). Designs are applied on top of the pages; the stored pages never change.
 2. **Sessions → Create** → drop **photos** (JPEG/PNG) and/or a **video** (MP4/MOV) into the upload area.
    - **Video → flipbook**: the app reads the video's frame rate and takes every Nth frame to get close to the chosen
      pages per second (default **12**: 24 fps → every 2nd frame, 60 fps → every 5th, 30 fps → every 3rd = 10/s). A 6 s take
      at 12/s = **72 pages**. Trim start/end if needed. Choose **upload all automatically** or **review and pick pages**
      (remembered per computer). Max 240 pages per take. Record **H.264 (8-bit)**; some 10-bit/HEVC camera modes can't
      be read by browsers.
+     The importer also asks for a **page design** and whether to add a **cover** (session name + date); right after
+     upload the studio PC renders the customer **video (MP4)** and stores it with the take.
+   - **Flipbook take card**: change the design / cover text → **Save design & remake video**. **Download video**,
+     **Download GIF** (720 px wide, made on the spot, ~5–10 s).
+     **Print PDF** (A4: 10 pages per sheet, Letter: 8) → print at **100% / Actual size**, cut on the grey lines, stack with
+     the cover on top, staple on the left (page numbers sit in the binding margin).
    - **Frames**: pick a frame, tap a slot, tap a photo → **Save framed photo**.
-3. Show the QR ("Show QR to customer") or copy the link. The customer sees their **flipbook playing** (with
-   "Download pages (.zip)"), the framed results and all shots, with "Save all to phone" (share sheet) or a .zip on desktop.
-   Staff can also download a take's pages as `page-001.jpg …` from the session page (e.g. to print them).
+3. Show the QR ("Show QR to customer") or copy the link. The customer sees their **flipbook video playing** with
+   **Save video** (share sheet → Photos on phones, a download on computers) and **Save GIF** (built on their phone from the
+   page thumbnails in a few seconds, 600 px, ~2–5 MB, same design and cover), the framed results and all shots, with
+   "Save all to phone" (share sheet) or a .zip on desktop.
 4. Expired links show an "expired" page. **+30 days** extends (e.g. after the customer pays).
    `PURGE_GRACE_DAYS` (default 3) after expiry, the daily cron deletes the files from storage.
 
@@ -98,6 +110,7 @@ anytime within that hour.
   routes must be listed in `optimizeDeps.include` in `vite.config.ts`; add new ones there. In production the app reloads
   itself once when this happens (e.g. right after a deploy).
 - **Gallery or admin shows network errors**: the Supabase free project may have paused after a week idle. Resume it in the dashboard.
+- **"This browser can't make MP4 videos"**: use Chrome or Edge on the studio PC (needs the WebCodecs video encoder).
 - **Upload fails with 413**: Vercel functions accept at most 4.5 MB per request. Browser-resized photos are ~0.5–2 MB, so
   this only happens with unusual files.
 - **Vercel shows NOT_FOUND on every page**: the deployment isn't using `vercel.json` (check it's committed), or
@@ -106,13 +119,11 @@ anytime within that hour.
 ## Free-tier limits to keep in mind
 
 Supabase free: **1 GB** file storage, **~5 GB/month** egress (every gallery view/download counts), and the project
-**pauses after ~1 week idle**. At ~20 MB per session (a 72-page take is ~15–25 MB) that's ~40–50 live sessions. Fine for a prototype; if it gets tight,
+**pauses after ~1 week idle**. At ~20 MB per session (a 72-page take is ~15–25 MB, its video 0.3–3 MB) that's ~40–50 live sessions. Fine for a prototype; if it gets tight,
 move photos to Cloudflare R2 (10 GB free, free egress). Only the storage helpers in `server/app.ts` need to change.
 
 ## Not built yet (on purpose)
 
-- **Printing the flipbook** (page layout with a binding margin, page numbers, several pages per sheet with cut lines).
-  Pages are stored in order per take, ready for this.
 - Printing framed photos (frames already render at 300 DPI print size, so it's just a print step after "Save framed photo")
 - Auto-import from the camera folder (File System Access API watching the tether folder)
 - Payment for extensions (manual +30 days button for now)

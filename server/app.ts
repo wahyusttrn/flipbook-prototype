@@ -13,7 +13,11 @@
 //          POST   /api/admin/sessions/:id/photos   (multipart: full, thumb, kind, width, height, template_id?,
 //                                                    take_id + frame_index when kind = 'frame')
 //          POST   /api/admin/sessions/:id/takes    (JSON: fps, source_name) → take row
-//          DELETE /api/admin/takes/:id             (take + all its frames)
+//          DELETE /api/admin/takes/:id             (take + all its frames + video)
+//          PATCH  /api/admin/takes/:id             (JSON: design_template_id?, cover?) → clears the old video
+//          POST   /api/admin/takes/:id/video       (multipart: video = rendered MP4)
+//          GET    /api/admin/takes/:id/video
+// Public:  GET    /api/public/takes/:id/video[?download=1]   (Range requests supported: iOS needs them)
 //          DELETE /api/admin/photos/:id
 //          DELETE /api/admin/sessions/:id
 //          POST   /api/admin/templates             (multipart: overlay, name, width, height, slots)
@@ -28,9 +32,12 @@ import {
   isExpired,
   STORAGE_BUCKET,
   storageKeys,
+  type FlipbookCover,
   type PhotoKind,
   type PublicSession,
+  type PublicTake,
   type Slot,
+  type TemplateKind,
 } from '../src/lib/shared.js'
 
 /** Server env (process.env on Vercel, .env via Vite's loadEnv in dev). */
@@ -89,8 +96,8 @@ async function requireAdmin(req: Request, env: ServerEnv, sb: SupabaseClient) {
 
 const bucket = (sb: SupabaseClient) => sb.storage.from(STORAGE_BUCKET)
 
-async function putObject(sb: SupabaseClient, key: string, file: Blob, contentType: string) {
-  const { error } = await bucket(sb).upload(key, file, { contentType, upsert: false })
+async function putObject(sb: SupabaseClient, key: string, file: Blob, contentType: string, upsert = false) {
+  const { error } = await bucket(sb).upload(key, file, { contentType, upsert })
   if (error) throw error
 }
 
@@ -101,14 +108,30 @@ async function removeObjects(sb: SupabaseClient, keys: string[]) {
   }
 }
 
-async function serveObject(sb: SupabaseClient, key: string, downloadName?: string) {
+async function serveObject(sb: SupabaseClient, key: string, downloadName?: string, range?: string | null) {
   const { data, error } = await bucket(sb).download(key)
   if (error || !data) throw new HttpError(404, 'File not found')
   const headers = new Headers({
     'content-type': data.type || 'application/octet-stream',
     'cache-control': 'private, max-age=3600',
+    'accept-ranges': 'bytes',
   })
   if (downloadName) headers.set('content-disposition', `attachment; filename="${downloadName}"`)
+  // Byte ranges: Safari/iOS won't play a <video> unless the server answers them with 206.
+  const m = range?.match(/^bytes=(\d*)-(\d*)$/)
+  if (m && (m[1] || m[2])) {
+    const size = data.size
+    let start = m[1] ? Number(m[1]) : size - Number(m[2])
+    let end = m[1] && m[2] ? Number(m[2]) : size - 1
+    start = Math.max(0, start)
+    end = Math.min(end, size - 1)
+    if (start > end) {
+      headers.set('content-range', `bytes */${size}`)
+      return new Response(null, { status: 416, headers })
+    }
+    headers.set('content-range', `bytes ${start}-${end}/${size}`)
+    return new Response(data.slice(start, end + 1), { status: 206, headers })
+  }
   return new Response(data, { headers })
 }
 
@@ -165,11 +188,22 @@ async function getPublicSession(sb: SupabaseClient, slug: string): Promise<Respo
       .eq('session_id', s.id)
       .order('created_at')
       .order('frame_index', { nullsFirst: true }),
-    sb.from('takes').select('id, fps').eq('session_id', s.id).order('created_at'),
+    sb
+      .from('takes')
+      .select('id, fps, cover, video_key, design:templates(id, width, height, slots)')
+      .eq('session_id', s.id)
+      .order('created_at'),
   ])
   if (pErr) throw pErr
   if (tErr) throw tErr
-  return json({ status: 'ok', name: s.name, expires_at: s.expires_at, photos, takes } satisfies PublicSession)
+  const publicTakes: PublicTake[] = (takes ?? []).map((t) => ({
+    id: t.id,
+    fps: Number(t.fps),
+    cover: t.cover as FlipbookCover | null,
+    design: (t.design as unknown as PublicTake['design']) ?? null,
+    has_video: !!t.video_key,
+  }))
+  return json({ status: 'ok', name: s.name, expires_at: s.expires_at, photos, takes: publicTakes } satisfies PublicSession)
 }
 
 async function loadPhoto(sb: SupabaseClient, id: string) {
@@ -278,11 +312,82 @@ async function createTake(req: Request, sb: SupabaseClient, sessionId: string) {
 async function deleteTake(sb: SupabaseClient, id: string) {
   const { data: frames, error } = await sb.from('photos').select('storage_key, thumb_key').eq('take_id', id)
   if (error) throw error
-  await removeObjects(sb, (frames ?? []).flatMap((f) => [f.storage_key, f.thumb_key]))
+  const { data: take } = await sb.from('takes').select('video_key').eq('id', id).maybeSingle()
+  await removeObjects(sb, [
+    ...(frames ?? []).flatMap((f) => [f.storage_key, f.thumb_key]),
+    ...(take?.video_key ? [take.video_key] : []),
+  ])
   const { data: gone, error: delErr } = await sb.from('takes').delete().eq('id', id).select('id') // frames cascade
   if (delErr) throw delErr
   if (!gone?.length) throw new HttpError(404, 'Take not found')
   return json({ ok: true })
+}
+
+async function loadTake(sb: SupabaseClient, id: string) {
+  const { data, error } = await sb
+    .from('takes')
+    .select('id, session_id, video_key, sessions!inner(name, expires_at, purged_at)')
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new HttpError(404, 'Take not found')
+  const session = data.sessions as unknown as { name: string; expires_at: string; purged_at: string | null }
+  return { ...data, session }
+}
+
+function parseCover(raw: unknown): FlipbookCover | null {
+  if (raw === null) return null
+  const c = (raw ?? {}) as Record<string, unknown>
+  return {
+    enabled: c.enabled === true,
+    title: String(c.title ?? '').slice(0, 80),
+    subtitle: String(c.subtitle ?? '').slice(0, 80),
+  }
+}
+
+/** Change a take's design/cover. The old video no longer matches, so it's removed; the studio PC re-renders it. */
+async function updateTake(req: Request, sb: SupabaseClient, id: string) {
+  const take = await loadTake(sb, id)
+  const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
+  if (!body) throw new HttpError(400, 'JSON body required')
+  const patch: Record<string, unknown> = {}
+  if ('design_template_id' in body) {
+    const tid = body.design_template_id
+    if (tid !== null) {
+      const { data: t, error } = await sb.from('templates').select('kind').eq('id', String(tid)).maybeSingle()
+      if (error) throw new HttpError(400, 'Invalid "design_template_id"')
+      if (!t || t.kind !== 'flipbook') throw new HttpError(400, 'Design must be a flipbook page template')
+    }
+    patch.design_template_id = tid
+  }
+  if ('cover' in body) patch.cover = parseCover(body.cover)
+  if (!Object.keys(patch).length) throw new HttpError(400, 'Nothing to update')
+  if (take.video_key) {
+    await removeObjects(sb, [take.video_key])
+    patch.video_key = null
+  }
+  const { data, error } = await sb.from('takes').update(patch).eq('id', id).select().single()
+  if (error) throw error
+  return json(data)
+}
+
+async function uploadTakeVideo(req: Request, sb: SupabaseClient, id: string) {
+  const take = await loadTake(sb, id)
+  if (take.session.purged_at) throw new HttpError(410, 'Session files were already deleted')
+  const video = fileField(await req.formData(), 'video', ['video/mp4'])
+  const key = storageKeys.takeVideo(take.session_id, id)
+  await putObject(sb, key, video, 'video/mp4', true)
+  const { data, error } = await sb.from('takes').update({ video_key: key }).eq('id', id).select().single()
+  if (error) throw error
+  return json(data)
+}
+
+async function serveTakeVideo(req: Request, sb: SupabaseClient, id: string, url: URL, publicAccess: boolean) {
+  const take = await loadTake(sb, id)
+  if (publicAccess && isExpired(take.session)) throw new HttpError(410, 'This session has expired')
+  if (!take.video_key) throw new HttpError(404, 'Video not rendered yet')
+  const download = url.searchParams.has('download') ? `${safeFilename(take.session.name)}-flipbook.mp4` : undefined
+  return serveObject(sb, take.video_key, download, req.headers.get('range'))
 }
 
 async function deletePhoto(sb: SupabaseClient, id: string) {
@@ -331,13 +436,17 @@ async function createTemplate(req: Request, sb: SupabaseClient) {
   const width = intField(form, 'width')
   const height = intField(form, 'height')
   const slots = parseSlots(form.get('slots'), width, height)
+  const kind: TemplateKind = form.get('kind') === 'flipbook' ? 'flipbook' : 'photo'
+  if (kind === 'flipbook' && slots.length !== 1) {
+    throw new HttpError(400, 'A flipbook page design needs exactly one photo area')
+  }
 
   const id = crypto.randomUUID()
   const overlay_key = storageKeys.template(id)
   await putObject(sb, overlay_key, overlay, 'image/png')
   const { data, error } = await sb
     .from('templates')
-    .insert({ id, name, width, height, overlay_key, slots })
+    .insert({ id, kind, name, width, height, overlay_key, slots })
     .select()
     .single()
   if (error) {
@@ -404,6 +513,10 @@ const routes: [method: string, pattern: RegExp, admin: boolean, handler: (ctx: {
   ['POST', new RegExp(`^/api/admin/sessions/${UUID}/photos$`), true, ({ req, sb, p }) => uploadPhoto(req, sb, p[0])],
   ['POST', new RegExp(`^/api/admin/sessions/${UUID}/takes$`), true, ({ req, sb, p }) => createTake(req, sb, p[0])],
   ['DELETE', new RegExp(`^/api/admin/takes/${UUID}$`), true, ({ sb, p }) => deleteTake(sb, p[0])],
+  ['PATCH', new RegExp(`^/api/admin/takes/${UUID}$`), true, ({ req, sb, p }) => updateTake(req, sb, p[0])],
+  ['POST', new RegExp(`^/api/admin/takes/${UUID}/video$`), true, ({ req, sb, p }) => uploadTakeVideo(req, sb, p[0])],
+  ['GET', new RegExp(`^/api/admin/takes/${UUID}/video$`), true, ({ req, sb, p, url }) => serveTakeVideo(req, sb, p[0], url, false)],
+  ['GET', new RegExp(`^/api/public/takes/${UUID}/video$`), false, ({ req, sb, p, url }) => serveTakeVideo(req, sb, p[0], url, true)],
   ['DELETE', new RegExp(`^/api/admin/photos/${UUID}$`), true, ({ sb, p }) => deletePhoto(sb, p[0])],
   ['DELETE', new RegExp(`^/api/admin/sessions/${UUID}$`), true, ({ sb, p }) => deleteSession(sb, p[0])],
   ['POST', /^\/api\/admin\/templates$/, true, ({ req, sb }) => createTemplate(req, sb)],

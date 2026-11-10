@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+  <!-- Flipbook page design · 3×2 in at 600 DPI · one 16:9 photo hole (transparent).
+       The left 0.5 in (300 px) is the binding margin. Sprocket holes are drawn opaque (cream),
+       so they aren't detected as photo areas. -->
+  <defs>
+    <mask id="hole">
+      <rect width="1800" height="1200" fill="white"/>
+      <rect x="370" y="175" width="1360" height="765" fill="black"/>
+    </mask>
+    <pattern id="sprockets" x="330" y="0" width="80" height="1200" patternUnits="userSpaceOnUse">
+      <rect x="18" y="60" width="44" height="58" rx="9" fill="#efe8da"/>
+      <rect x="18" y="997" width="44" height="58" rx="9" fill="#efe8da"/>
+    </pattern>
+  </defs>
+  <g mask="url(#hole)">
+    <rect width="1800" height="1200" fill="#1d1b19"/>
+    <rect width="300" height="1200" fill="#2a2724"/>
+    <rect x="330" y="0" width="1440" height="1200" fill="url(#sprockets)"/>
+  </g>
+  <g font-family="'Courier New', Menlo, monospace" font-weight="bold" fill="#f08a24">
+    <text x="372" y="158" font-size="30" letter-spacing="4">▸ 1A</text>
+    <text x="900" y="158" font-size="30" letter-spacing="4">2</text>
+    <text x="1300" y="158" font-size="30" letter-spacing="4">▸ 2A</text>
+    <text x="1728" y="158" font-size="30" letter-spacing="4" text-anchor="end">3</text>
+    <text x="1050" y="1130" font-size="44" letter-spacing="14" text-anchor="middle">TAKE ONE · FLIPBOOK</text>
+  </g>
+</svg>
