@@ -158,8 +158,10 @@ src/lib/flipbookVideo.ts   makeFlipbookVideo → MP4 Blob (mediabunny CanvasSour
 src/lib/flipbookGif.ts     makeFlipbookGif → GIF Blob (gifenc; used by TakeCard AND the gallery, so no Supabase import)
 src/lib/gifenc.d.ts        Types for the parts of gifenc we use
 src/lib/prefetch.ts        prefetch(tasks, limit=6): start downloads in order, N at a time, one promise per task
-src/lib/flipbookPdf.ts     makeFlipbookPdf → PDF Blob (A4 2×5 / Letter 2×4 cells of 3×2 in, grey cut lines, crop marks,
-                           vertical page numbers in the binding margin, header + instructions footer, Latin-1 text only)
+src/lib/flipbookPdf.ts     makeFlipbookPdf → PDF Blob. Sheet layouts in PAPER: A4 2×5 / Letter 2×4 cells of 3×2 in with
+                           0.5 in margins, crop marks, header + instructions footer; 4R = 6×4 in landscape, 2×2 cells edge
+                           to edge, no margins/marks/text (borderless photo print). All: grey cut lines, vertical page
+                           numbers in the binding margin, Latin-1 text only
 src/lib/download.ts        downloadBlob(blob, filename)
 src/lib/format.ts          DAY_MS, formatDate, formatDateTime, daysLeft, publicLink
 src/lib/slug.ts            randomSlug(): 10 chars, no look-alike characters
@@ -175,8 +177,8 @@ src/components/VideoImporter.tsx  Video → pages: preview, fps detection, pages
                                 in-memory frames + uploadTakeVideo
 src/components/FlipbookPlayer.tsx Animated page player (preloads, tap = play/pause, slider = flip). No Supabase import (gallery uses it)
 src/components/TakeCard.tsx     Admin take: designed preview (from thumbs), design select, cover toggle/title/subtitle,
-                                "Save design & remake video", Make/Download video, Download GIF, Print PDF (A4/Letter,
-                                `flipbook:paper`), delete. `pageLoader()` prefetches full pages per job
+                                "Save design & remake video", Make/Download video, Download GIF, Print PDF (A4/Letter/4R,
+                                `flipbook:paper`; 4R shows a "print borderless" hint), delete. `pageLoader()` prefetches full pages per job
 src/components/Composer.tsx     Frame picker, slot assignment, live preview, full-res render + upload
 src/components/RouteError.tsx  App error page; auto-reloads once (sessionStorage flag) when a lazy chunk fails to load
 src/components/QrCode.tsx, SessionStatus.tsx
@@ -297,7 +299,9 @@ the decoder, including from Safari on the phone itself.
 - **Save design & remake video**: `updateTake` (server drops the old MP4) → fetch full pages → `makeFlipbookVideo` →
   `uploadTakeVideo`. "Make video" re-renders without changing the design (e.g. after a failed auto-render).
 - **Print PDF**: full pages → `renderPrintPage` (900×600 JPEG q0.9) → 3×2 in cells. 72 pages + cover = 8 A4 sheets, ~4 MB,
-  <1 s. Fonts on the cover use the page's loaded web fonts (Fraunces/Inter; `document.fonts.load` first).
+  <1 s. **4R** (added 2026-11-10 on request): 6×4 in photo paper = exactly 4 pages, so no margins: meant for borderless
+  photo printers (dye-sub/inkjet "borderless"); if a printer enlarges borderless prints, the outer ~1 mm can be lost
+  (designs keep decorations off the edges). 48 pages + cover = 13 sheets (verified: 6.00×4.00 in, cover/1/2/3 on sheet 1). Fonts on the cover use the page's loaded web fonts (Fraunces/Inter; `document.fonts.load` first).
 - **Download GIF**: same pages/design/cover as the video, 720 px, not stored. 48 pages + cover ≈ 2.8 MB in ~5 s.
 - With a design, the video shows the whole printed page (incl. the binding margin), so it looks like the physical page.
 

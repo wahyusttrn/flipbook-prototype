@@ -81,8 +81,9 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
      upload the studio PC renders the customer **video (MP4)** and stores it with the take.
    - **Flipbook take card**: change the design / cover text → **Save design & remake video**. **Download video**,
      **Download GIF** (720 px wide, made on the spot, ~5–10 s).
-     **Print PDF** (A4: 10 pages per sheet, Letter: 8) → print at **100% / Actual size**, cut on the grey lines, stack with
-     the cover on top, staple on the left (page numbers sit in the binding margin).
+     **Print PDF** (A4: 10 pages per sheet, Letter: 8, **4R: 4**) → print at **100% / Actual size**, cut on the grey lines,
+     stack with the cover on top, staple on the left (page numbers sit in the binding margin). 4R (6×4 in photo paper) is
+     edge to edge with no margins, so print it **borderless** and cut through the middle both ways.
    - **Frames**: pick a frame, tap a slot, tap a photo → **Save framed photo**.
    - Everything above also works **on a phone** (e.g. uploading a take straight from an iPhone in Safari).
 3. Show the QR ("Show QR to customer") or copy the link. The customer sees their **flipbook video playing** with

@@ -20,7 +20,8 @@ const GIF_WIDTH = 720
 
 function readPaper(): Paper {
   try {
-    return localStorage.getItem(PREF_PAPER) === 'letter' ? 'letter' : 'a4'
+    const saved = localStorage.getItem(PREF_PAPER)
+    return saved === 'letter' || saved === '4r' ? saved : 'a4'
   } catch {
     return 'a4'
   }
@@ -294,11 +295,17 @@ export function TakeCard({
               >
                 <option value="a4">A4</option>
                 <option value="letter">Letter</option>
+                <option value="4r">4R</option>
               </select>
               <Button variant="danger" onClick={onDelete}>
                 Delete
               </Button>
             </div>
+            {paper === '4r' && (
+              <p className="text-xs text-stone-500">
+                4R: 4 pages per photo, edge to edge. Print <b>borderless</b> at 100%, then cut through the middle both ways.
+              </p>
+            )}
             <p className="text-xs text-stone-500">
               {take.video_key ? 'Customers see and save this video in their gallery.' : 'No video yet, so the gallery shows a plain preview.'}
             </p>
