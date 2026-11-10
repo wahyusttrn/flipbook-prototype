@@ -74,8 +74,9 @@ Vite + React (admin + public gallery)  ──►  /api/*  (Vercel Function → s
    - **Video → flipbook**: the app reads the video's frame rate and takes every Nth frame to get close to the chosen
      pages per second (default **12**: 24 fps → every 2nd frame, 60 fps → every 5th, 30 fps → every 3rd = 10/s). A 6 s take
      at 12/s = **72 pages**. Trim start/end if needed. Choose **upload all automatically** or **review and pick pages**
-     (remembered per computer). Max 240 pages per take. Record **H.264 (8-bit)**; some 10-bit/HEVC camera modes can't
-     be read by browsers.
+     (remembered per computer). Max 240 pages per take. Videos are read with the browser's video decoder (WebCodecs), so
+     iPhone clips (HEVC, HDR, portrait) work too, also when uploading from Safari on the phone. If a browser can't decode a
+     file, record in **H.264 (8-bit)** (iPhone: Settings → Camera → Formats → **Most Compatible**).
      The importer also asks for a **page design** and whether to add a **cover** (session name + date); right after
      upload the studio PC renders the customer **video (MP4)** and stores it with the take.
    - **Flipbook take card**: change the design / cover text → **Save design & remake video**. **Download video**,
@@ -110,6 +111,8 @@ anytime within that hour.
   routes must be listed in `optimizeDeps.include` in `vite.config.ts`; add new ones there. In production the app reloads
   itself once when this happens (e.g. right after a deploy).
 - **Gallery or admin shows network errors**: the Supabase free project may have paused after a week idle. Resume it in the dashboard.
+- **"This browser can't read this video"**: the browser has no decoder for that codec (e.g. HEVC on some Windows PCs).
+  Record in H.264, or use Chrome/Edge/Safari on a Mac.
 - **"This browser can't make MP4 videos"**: use Chrome or Edge on the studio PC (needs the WebCodecs video encoder).
 - **Upload fails with 413**: Vercel functions accept at most 4.5 MB per request. Browser-resized photos are ~0.5–2 MB, so
   this only happens with unusual files.

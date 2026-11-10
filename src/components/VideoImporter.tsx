@@ -3,7 +3,7 @@ import { adminApi } from '../lib/api'
 import { defaultCover, loadDesign } from '../lib/flipbook'
 import { decode } from '../lib/image'
 import { DEFAULT_FLIPBOOK_FPS, FRAME_MAX_EDGE, MAX_TAKE_FRAMES, type Photo, type Take, type Template } from '../lib/shared'
-import { detectFps, disposeVideo, extractFrames, loadVideo, planFrames, type ExtractedFrame } from '../lib/video'
+import { openVideo, planFrames, type ExtractedFrame, type VideoReader } from '../lib/video'
 import { FlipbookPlayer } from './FlipbookPlayer'
 import { Button, ErrorText, Spinner } from './ui'
 
@@ -61,7 +61,7 @@ export function VideoImporter({
   /** Object URL of the file, for the visible preview (set once the video has loaded) */
   const [url, setUrl] = useState<string | null>(null)
   const preview = useRef<HTMLVideoElement>(null)
-  const worker = useRef<HTMLVideoElement | null>(null)
+  const worker = useRef<VideoReader | null>(null)
   const abort = useRef<AbortController | null>(null)
 
   const [phase, setPhase] = useState<Phase>('loading')
@@ -83,27 +83,26 @@ export function VideoImporter({
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [failed, setFailed] = useState<string[]>([])
 
-  // Load the video off-screen and measure its frame rate. The object URL is created and
+  // Open the video for extraction and read its frame rate. The object URL is created and
   // revoked by this same effect, so React's dev double-mount can't leave a revoked URL behind.
   useEffect(() => {
     let alive = true
-    let v: HTMLVideoElement | null = null
+    let reader: VideoReader | null = null
     const objectUrl = URL.createObjectURL(file)
     ;(async () => {
-      v = await loadVideo(objectUrl)
-      const fps = await detectFps(v)
-      if (!alive) return disposeVideo(v)
-      worker.current = v
+      reader = await openVideo(file, objectUrl)
+      if (!alive) return reader.dispose()
+      worker.current = reader
       setUrl(objectUrl)
-      setDuration(v.duration)
-      setEnd(v.duration)
-      setSourceFps(fps)
+      setDuration(reader.duration)
+      setEnd(reader.duration)
+      setSourceFps(reader.fps)
       setPhase('ready')
     })().catch((e) => alive && setError(e))
     return () => {
       alive = false
       abort.current?.abort()
-      if (v) disposeVideo(v)
+      reader?.dispose()
       worker.current = null
       URL.revokeObjectURL(objectUrl)
     }
@@ -130,8 +129,8 @@ export function VideoImporter({
   }
 
   async function extract() {
-    const v = worker.current
-    if (!v || pageCount === 0 || tooMany) return
+    const reader = worker.current
+    if (!reader || pageCount === 0 || tooMany) return
     setError(null)
     frames.forEach((f) => URL.revokeObjectURL(f.thumbUrl))
     setFrames([])
@@ -140,7 +139,7 @@ export function VideoImporter({
     abort.current = new AbortController()
     const got: ExtractedFrame[] = []
     try {
-      await extractFrames(v, plan.times, {
+      await reader.extract(plan.times, {
         maxEdge: FRAME_MAX_EDGE,
         signal: abort.current.signal,
         onFrame: (f) => {

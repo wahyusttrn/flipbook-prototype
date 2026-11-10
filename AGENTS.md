@@ -99,11 +99,18 @@ Key design decisions (and why):
   (`vite.config.ts`). Otherwise Vite discovers it on first visit, re-optimizes, and the chunk import fails
   ("Failed to fetch dynamically imported module"). Currently: `@supabase/supabase-js`, `qrcode`, `fflate`, `mediabunny`,
   `pdf-lib`, `gifenc`.
-- **Video never leaves the browser** (`src/lib/video.ts`): a `<video>` element decodes the take, `detectFps()` measures the
-  real frame rate from `requestVideoFrameCallback` timestamps (½ s of muted playback, smallest gap, snapped to the
-  *closest* standard rate, since 24 vs 23.976 is only 0.1%), `planFrames()` picks every Nth source frame whose rate is
-  closest to the target and aims at the **middle** of each frame `(f + 0.5) / fps` so seeks never land on a neighbour;
-  without a detected fps it samples by time (`start + k/target + 1ms`). Frames are drawn to canvas → JPEG (≤1920px, q0.85)
+- **Video never leaves the browser** (`src/lib/video.ts`). `openVideo(file, url)` returns a `VideoReader` from one of two engines:
+  - **decoder** (preferred, 2026-11-10): mediabunny `Input(BlobSource)` + WebCodecs. Frame rate =
+    `computeFrameRateMetrics().bestGuessFrameRate` (from frame timestamps), frames from `CanvasSink.canvasesAtTimestamps`
+    (decoded at output size, file rotation applied, timestamps offset by `getFirstTimestamp()`). ~4× faster than seeking
+    (72 pages ≈ 0.7 s). **Why it exists:** iPhone Safari ignores `preload` and loads no picture for a hidden `<video>`, so
+    uploading from the phone timed out on `loadeddata`. Used when `VideoDecoder` exists and `track.canDecode()`.
+  - **element** (fallback: no WebCodecs, or a codec the decoder can't handle): hidden `<video>`, waits for
+    `loadedmetadata`, then a muted `play()` if no picture is loaded yet (the iOS rule), `detectFps()` measures the real rate
+    from `requestVideoFrameCallback` timestamps (½ s of muted playback, smallest gap), one seek per frame.
+  Both snap the rate to the *closest* standard rate (24 vs 23.976 is only 0.1%) and pick **identical frames** (verified, §10).
+  `planFrames()` picks every Nth source frame whose rate is closest to the target and aims at the **middle** of each frame
+  `(f + 0.5) / fps` so a lookup never lands on a neighbour; without a known fps it samples by time (`start + k/target + 1ms`). Frames are drawn to canvas → JPEG (≤1920px, q0.85)
   + 480px thumb, then uploaded as photos with `kind: 'frame'`. Verified with frame-numbered ffmpeg videos (§10).
 - **Flipbook outputs are made on the studio PC**: `makeFlipbookVideo` (H.264 MP4, long edge ≤1280, QUALITY_MEDIUM, retried at
   LOW if over 4 MB; timeline = 1 s cover + one page per 1/fps + ½ s hold on the last page) is uploaded to the take and
@@ -141,7 +148,8 @@ src/lib/supabase.ts        Browser supabase client + isSupabaseConfigured (place
 src/lib/publicApi.ts       ApiError + public endpoints (NO supabase import)
 src/lib/api.ts             Authed request() + adminApi (uploads, deletes, photoBlob cache); re-exports publicApi
 src/lib/image.ts           decode, loadImage, resizeToJpeg, prepareUpload, drawCover, composeFrame, detectSlots, toBlob
-src/lib/video.ts           loadVideo, detectFps, planFrames, extractFrames, disposeVideo, VideoReadError (browser-only)
+src/lib/video.ts           openVideo → VideoReader (engine 'decoder' | 'element': width, height, duration, fps, extract,
+                           dispose), planFrames, VideoReadError (browser-only)
 src/lib/zip.ts             zipFiles([{name, blob}]) via fflate (level 0), used by the gallery's desktop "Download all"
 src/lib/flipbook.ts        Page rendering shared by preview/MP4/PDF: loadDesign (cached overlay), renderPage, renderCover
                            (title/subtitle over a gradient in the photo hole), renderPrintPage (900×600 = 3×2 in @300 DPI;
@@ -280,7 +288,9 @@ copies the preview's current time), and a summary like "every 2nd frame → 12 p
 `MAX_TAKE_FRAMES` (240) is blocked. **Auto**: extract → `createTake` → upload all. **Pick**: extract → review grid (tap to
 exclude, animated preview of the selection) → upload chosen. `frame_index` is the position among the *uploaded* pages
 (contiguous 0…n-1). Partial upload failures keep the take with the pages that made it, and list the failures.
-Undecodable files → `VideoReadError` with the H.264 hint. Seeking: ~50 ms/frame, so a 72-page take extracts in ~4 s.
+Undecodable files → `VideoReadError` with the H.264 hint (also on a load timeout). Extraction: decoder ≈ 10 ms/frame
+(72 pages < 1 s), element fallback ≈ 50 ms/frame. iPhone Camera files (HEVC, 10-bit HDR, portrait rotation) work through
+the decoder, including from Safari on the phone itself.
 
 ### Flipbook design, video and print (`TakeCard.tsx`, `lib/flipbook*.ts`)
 - Preview: thumbs → `renderPage` / `renderCover` at 480 px, debounced 150 ms, so changes show before saving.
@@ -396,7 +406,11 @@ before async module code finishes, so poll with `Runtime.evaluate`), then **dele
 videos where frame N has a white bar at x = N·5 (`geq=lum='if(between(X,N*5,N*5+4),235,16)'`, at 24, 24000/1001, 30, 60 fps)
 plus a random-bytes `broken.mp4`; a temp page in `public/` extracts them and reads the bar position back. Expected at 12/s:
 24 → frames 0,2,4…142 (72 pages), 23.976 → same, 30 → 0,3,6…177 (60 pages, 10/s), 60 → 0,5…355 (72), broken →
-VideoReadError. Headless Chrome needs `--autoplay-policy=no-user-gesture-required` for `detectFps`. Expected results on the
+VideoReadError. Run it through **both** engines (`openVideo(file, url, 'decoder' | 'element')`): the frame lists must
+match (they did on 2026-11-10, plus trims and the time-based fallback). iPhone-style files: `libx265` hvc1 8-bit, 10-bit HLG
+(`-pix_fmt yuv420p10le`, bt2020/arib-std-b67) and the same with `-display_rotation 90` (→ 1080×1920 pages); a UI run
+uploaded the portrait HDR one end to end. iOS Safari itself can't be automated here (no Xcode simulator).
+Headless Chrome needs `--autoplay-policy=no-user-gesture-required` for `detectFps`. Expected results on the
 samples: classic-strip → 4 slots ≈ `{33,33,534,378}`…; film-35mm → 3 ≈ `{147,57,906,492}`…;
 pastel-party → 6 ≈ `{57,237,531,456}`… (detected boxes are ~3px larger than the holes on purpose).
 
